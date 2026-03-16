@@ -35,13 +35,25 @@ add_executable(
   test_executables.cpp
 )
 
+add_executable(
+  test_ref_diff_wavelet
+  test_ref_diff_wavelet.cpp
+)
+
 target_link_libraries(
   test_executables
   GTest::gtest_main
 )
 
+target_link_libraries(
+  test_ref_diff_wavelet
+  GTest::gtest_main
+  openjph
+)
+
 include(GoogleTest)
 gtest_add_tests(TARGET test_executables)
+gtest_add_tests(TARGET test_ref_diff_wavelet)
 
 if (MSVC)
   add_custom_command(TARGET test_executables POST_BUILD
