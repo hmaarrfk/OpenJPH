@@ -36,8 +36,8 @@ add_executable(
 )
 
 add_executable(
-  test_ref_diff_wavelet
-  test_ref_diff_wavelet.cpp
+  test_r1x1_wavelet
+  test_r1x1_wavelet.cpp
 )
 
 target_link_libraries(
@@ -46,14 +46,14 @@ target_link_libraries(
 )
 
 target_link_libraries(
-  test_ref_diff_wavelet
+  test_r1x1_wavelet
   GTest::gtest_main
   openjph
 )
 
 include(GoogleTest)
 gtest_add_tests(TARGET test_executables)
-gtest_add_tests(TARGET test_ref_diff_wavelet)
+gtest_add_tests(TARGET test_r1x1_wavelet)
 
 if (MSVC)
   add_custom_command(TARGET test_executables POST_BUILD

@@ -464,6 +464,7 @@ namespace ojph {
         this->atk = cdp->access_atk();
         this->reversible = atk->is_reversible();
         this->num_steps = atk->get_num_steps();
+        this->use_r1x1 = cdp->is_using_r1x1();
         // create line buffers and lifting_bufs
         lines = allocator->post_alloc_obj<line_buf>(num_steps + 2);
         ssp = allocator->post_alloc_obj<lifting_buf>(num_steps + 2);
@@ -568,18 +569,25 @@ namespace ojph {
 
           do
           {
-            //vertical transform
-            for (ui32 i = 0; i < num_steps; ++i)
+            if (use_r1x1)
             {
-              if (aug->active && (sig->active || ssp[i].active))
+              if (aug->active && sig->active)
+                r1x1_rev_vert_ana(sig->line, aug->line, width);
+            }
+            else
+            {
+              for (ui32 i = 0; i < num_steps; ++i)
               {
-                line_buf* dp = aug->line;
-                line_buf* sp1 = sig->active ? sig->line : ssp[i].line;
-                line_buf* sp2 = ssp[i].active ? ssp[i].line : sig->line;
-                const lifting_step* s = atk->get_step(num_steps - i - 1);
-                rev_vert_step(s, sp1, sp2, dp, width, false);
+                if (aug->active && (sig->active || ssp[i].active))
+                {
+                  line_buf* dp = aug->line;
+                  line_buf* sp1 = sig->active ? sig->line : ssp[i].line;
+                  line_buf* sp2 = ssp[i].active ? ssp[i].line : sig->line;
+                  const lifting_step* s = atk->get_step(num_steps - i - 1);
+                  rev_vert_step(s, sp1, sp2, dp, width, false);
+                }
+                lifting_buf t = *aug; *aug = ssp[i]; ssp[i] = *sig; *sig = t;
               }
-              lifting_buf t = *aug; *aug = ssp[i]; ssp[i] = *sig; *sig = t;
             }
 
             if (aug->active) {
@@ -767,18 +775,25 @@ namespace ojph {
                 }
               }
 
-              //vertical transform
-              for (ui32 i = 0; i < num_steps; ++i)
+              if (use_r1x1)
               {
-                if (aug->active && (sig->active || ssp[i].active))
+                if (aug->active && sig->active)
+                  r1x1_rev_vert_syn(aug->line, sig->line, width);
+              }
+              else
+              {
+                for (ui32 i = 0; i < num_steps; ++i)
                 {
-                  line_buf* dp = aug->line;
-                  line_buf* sp1 = sig->active ? sig->line : ssp[i].line;
-                  line_buf* sp2 = ssp[i].active ? ssp[i].line : sig->line;
-                  const lifting_step* s = atk->get_step(i);
-                  rev_vert_step(s, sp1, sp2, dp, width, true);
+                  if (aug->active && (sig->active || ssp[i].active))
+                  {
+                    line_buf* dp = aug->line;
+                    line_buf* sp1 = sig->active ? sig->line : ssp[i].line;
+                    line_buf* sp2 = ssp[i].active ? ssp[i].line : sig->line;
+                    const lifting_step* s = atk->get_step(i);
+                    rev_vert_step(s, sp1, sp2, dp, width, true);
+                  }
+                  lifting_buf t = *aug; *aug = ssp[i]; ssp[i] = *sig; *sig = t;
                 }
-                lifting_buf t = *aug; *aug = ssp[i]; ssp[i] = *sig; *sig = t;
               }
 
               if (aug->active) {

@@ -35,7 +35,7 @@
 #include "../src/core/transform/ojph_transform.h"
 #include "gtest/gtest.h"
 
-TEST(RefDiffWavelet, HorzRoundTripEvenAligned) {
+TEST(R1X1Wavelet, HorzRoundTripEvenAligned) {
   using namespace ojph;
 
   si32 src_buf[4] = {1, 2, 3, 4};
@@ -53,10 +53,9 @@ TEST(RefDiffWavelet, HorzRoundTripEvenAligned) {
   hdst.wrap(h_buf, 4, 0);
   dst.wrap(dst_buf, 4, 0);
 
-  local::ref_rev_horz_ana(nullptr, &ldst, &hdst, &src, 4, true);
-  local::ref_rev_horz_syn(nullptr, &dst, &ldst, &hdst, 4, true);
+  local::r1x1_rev_horz_ana(nullptr, &ldst, &hdst, &src, 4, true);
+  local::r1x1_rev_horz_syn(nullptr, &dst, &ldst, &hdst, 4, true);
 
   for (int i = 0; i < 4; ++i)
     EXPECT_EQ(dst_buf[i], src_buf[i]);
 }
-

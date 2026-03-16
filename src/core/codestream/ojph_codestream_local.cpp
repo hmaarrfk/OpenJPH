@@ -112,6 +112,7 @@ namespace ojph {
     //////////////////////////////////////////////////////////////////////////
     void codestream::pre_alloc()
     {
+      local::set_r1x1_kernel(cod.is_using_r1x1());
       ojph::param_siz sz = access_siz();
       num_tiles.w = sz.get_image_extent().x - sz.get_tile_offset().x;
       num_tiles.w = ojph_div_ceil(num_tiles.w, sz.get_tile_size().w);
@@ -642,6 +643,13 @@ namespace ojph {
 
       if (!cod.write(file))
         OJPH_ERROR(0x00030025, "Error writing to file");
+
+      if (cod.is_using_r1x1())
+      {
+        param_atk* p = atk.get_atk(2);
+        if (p && !p->write(file))
+          OJPH_ERROR(0x00030025, "Error writing ATK to file");
+      }
 
       if (!cod.write_coc(file, num_comps))
         OJPH_ERROR(0x0003002E, "Error writing to file");

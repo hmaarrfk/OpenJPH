@@ -61,7 +61,25 @@ namespace ojph {
 
       bool empty = ((band_rect.siz.w == 0) || (band_rect.siz.h == 0));
       if (empty)
+      {
+        const param_cod* cdp = codestream->get_coc(comp_num);
+        const param_qcd* qp = codestream->access_qcd()->get_qcc(comp_num);
+        ui32 precision = qp->propose_precision(cdp);
+        const param_atk* atk = cdp->access_atk();
+        bool reversible = atk->is_reversible();
+        allocator->pre_alloc_obj<line_buf>(1);
+        ui32 width = 1;
+        if (reversible)
+        {
+          if (precision <= 32)
+            allocator->pre_alloc_data<si32>(width, 1);
+          else
+            allocator->pre_alloc_data<si64>(width, 1);
+        }
+        else
+          allocator->pre_alloc_data<float>(width, 1);
         return;
+      }
 
       const param_cod* cdp = codestream->get_coc(comp_num);
       size log_cb = cdp->get_log_block_dims();
@@ -165,7 +183,20 @@ namespace ojph {
 
       this->empty = ((band_rect.siz.w == 0) || (band_rect.siz.h == 0));
       if (this->empty)
+      {
+        lines = allocator->post_alloc_obj<line_buf>(1);
+        ui32 width = 1;
+        if (reversible)
+        {
+          if (precision <= 32)
+            lines->wrap(allocator->post_alloc_data<si32>(width, 1), width, 1);
+          else
+            lines->wrap(allocator->post_alloc_data<si64>(width, 1), width, 1);
+        }
+        else
+          lines->wrap(allocator->post_alloc_data<float>(width, 1), width, 1);
         return;
+      }
 
       ui32 tbx0 = band_rect.org.x;
       ui32 tby0 = band_rect.org.y;

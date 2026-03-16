@@ -47,10 +47,14 @@
 
 namespace ojph {
 
-  // defined elsewhere
   class line_buf;
 
   namespace local {
+
+    static void (*saved_rev_horz_ana)(const param_atk*, const line_buf*,
+      const line_buf*, const line_buf*, ui32, bool) = NULL;
+    static void (*saved_rev_horz_syn)(const param_atk*, const line_buf*,
+      const line_buf*, const line_buf*, ui32, bool) = NULL;
 
     /////////////////////////////////////////////////////////////////////////
     // Reversible functions
@@ -182,9 +186,26 @@ namespace ojph {
         irv_horz_ana              = wasm_irv_horz_ana;
         irv_horz_syn              = wasm_irv_horz_syn;
 #endif // !OJPH_ENABLE_WASM_SIMD
+        saved_rev_horz_ana        = rev_horz_ana;
+        saved_rev_horz_syn        = rev_horz_syn;
       });
     }
-    
+
+    void set_r1x1_kernel(bool enable)
+    {
+      init_wavelet_transform_functions();
+      if (enable)
+      {
+        rev_horz_ana = r1x1_rev_horz_ana;
+        rev_horz_syn = r1x1_rev_horz_syn;
+      }
+      else if (saved_rev_horz_ana != NULL && saved_rev_horz_syn != NULL)
+      {
+        rev_horz_ana = saved_rev_horz_ana;
+        rev_horz_syn = saved_rev_horz_syn;
+      }
+    }
+
     //////////////////////////////////////////////////////////////////////////
 
 #if !defined(OJPH_ENABLE_WASM_SIMD) || !defined(OJPH_EMSCRIPTEN)
@@ -672,175 +693,125 @@ namespace ojph {
       }
     }    
 
-    static
-    void ref_rev_horz_ana32(const param_atk*,
-                            const line_buf* ldst,
-                            const line_buf* hdst,
-                            const line_buf* src,
-                            ui32 width,
-                            bool even)
+    static void r1x1_rev_horz_ana32(const param_atk*,
+                                    const line_buf* ldst,
+                                    const line_buf* hdst,
+                                    const line_buf* src,
+                                    ui32 width,
+                                    bool even)
     {
       if (width == 0) return;
-
       const si32* sp = src->i32;
       si32* lp = ldst->i32;
       si32* hp = hdst->i32;
-
       ui32 w = width;
-
       if (!even)
       {
         *hp++ = *sp++;
-        *lp++ = 0;
         --w;
       }
-
       for (; w > 1; w -= 2)
       {
-        si32 x0 = *sp++;
-        si32 x1 = *sp++;
-        *lp++ = x0;
-        *hp++ = x1 - x0;
+        *lp++ = *sp++;
+        *hp++ = *sp++;
       }
-
       if (w)
-      {
-        si32 x0 = *sp++;
-        *lp++ = x0;
-        *hp++ = 0;
-      }
+        *lp++ = *sp++;
     }
 
-    static
-    void ref_rev_horz_ana64(const param_atk*,
-                            const line_buf* ldst,
-                            const line_buf* hdst,
-                            const line_buf* src,
-                            ui32 width,
-                            bool even)
+    static void r1x1_rev_horz_ana64(const param_atk*,
+                                    const line_buf* ldst,
+                                    const line_buf* hdst,
+                                    const line_buf* src,
+                                    ui32 width,
+                                    bool even)
     {
       if (width == 0) return;
-
       const si64* sp = src->i64;
       si64* lp = ldst->i64;
       si64* hp = hdst->i64;
-
       ui32 w = width;
-
       if (!even)
       {
         *hp++ = *sp++;
-        *lp++ = 0;
         --w;
       }
-
       for (; w > 1; w -= 2)
       {
-        si64 x0 = *sp++;
-        si64 x1 = *sp++;
-        *lp++ = x0;
-        *hp++ = x1 - x0;
+        *lp++ = *sp++;
+        *hp++ = *sp++;
       }
-
       if (w)
-      {
-        si64 x0 = *sp++;
-        *lp++ = x0;
-        *hp++ = 0;
-      }
+        *lp++ = *sp++;
     }
 
-    void ref_rev_horz_ana(const param_atk* atk,
-                          const line_buf* ldst,
-                          const line_buf* hdst,
-                          const line_buf* src,
-                          ui32 width,
-                          bool even)
+    void r1x1_rev_horz_ana(const param_atk* atk,
+                           const line_buf* ldst,
+                           const line_buf* hdst,
+                           const line_buf* src,
+                           ui32 width,
+                           bool even)
     {
       ojph_unused(atk);
       if (src->flags & line_buf::LFT_32BIT)
-        ref_rev_horz_ana32(atk, ldst, hdst, src, width, even);
+        r1x1_rev_horz_ana32(atk, ldst, hdst, src, width, even);
       else
-        ref_rev_horz_ana64(atk, ldst, hdst, src, width, even);
+        r1x1_rev_horz_ana64(atk, ldst, hdst, src, width, even);
     }
 
-    static
-    void ref_rev_horz_syn32(const param_atk*,
-                            const line_buf* dst,
-                            const line_buf* lsrc,
-                            const line_buf* hsrc,
-                            ui32 width,
-                            bool even)
+    static void r1x1_rev_horz_syn32(const param_atk*,
+                                    const line_buf* dst,
+                                    const line_buf* lsrc,
+                                    const line_buf* hsrc,
+                                    ui32 width,
+                                    bool even)
     {
       if (width == 0) return;
-
       si32* dp = dst->i32;
       const si32* lp = lsrc->i32;
       const si32* hp = hsrc->i32;
-
       ui32 w = width;
-
       if (!even)
       {
         *dp++ = *hp++;
-        ++lp;
         --w;
       }
-
       for (; w > 1; w -= 2)
       {
-        si32 L = *lp++;
-        si32 H = *hp++;
-        *dp++ = L;
-        *dp++ = L + H;
+        *dp++ = *lp++;
+        *dp++ = *hp++;
       }
-
       if (w)
-      {
-        si32 L = *lp++;
-        *dp++ = L;
-      }
+        *dp++ = *lp++;
     }
 
-    static
-    void ref_rev_horz_syn64(const param_atk*,
-                            const line_buf* dst,
-                            const line_buf* lsrc,
-                            const line_buf* hsrc,
-                            ui32 width,
-                            bool even)
+    static void r1x1_rev_horz_syn64(const param_atk*,
+                                    const line_buf* dst,
+                                    const line_buf* lsrc,
+                                    const line_buf* hsrc,
+                                    ui32 width,
+                                    bool even)
     {
       if (width == 0) return;
-
       si64* dp = dst->i64;
       const si64* lp = lsrc->i64;
       const si64* hp = hsrc->i64;
-
       ui32 w = width;
-
       if (!even)
       {
         *dp++ = *hp++;
-        ++lp;
         --w;
       }
-
       for (; w > 1; w -= 2)
       {
-        si64 L = *lp++;
-        si64 H = *hp++;
-        *dp++ = L;
-        *dp++ = L + H;
+        *dp++ = *lp++;
+        *dp++ = *hp++;
       }
-
       if (w)
-      {
-        si64 L = *lp++;
-        *dp++ = L;
-      }
+        *dp++ = *lp++;
     }
 
-    void ref_rev_horz_syn(const param_atk* atk,
+    void r1x1_rev_horz_syn(const param_atk* atk,
                           const line_buf* dst,
                           const line_buf* lsrc,
                           const line_buf* hsrc,
@@ -849,9 +820,53 @@ namespace ojph {
     {
       ojph_unused(atk);
       if (dst->flags & line_buf::LFT_32BIT)
-        ref_rev_horz_syn32(atk, dst, lsrc, hsrc, width, even);
+        r1x1_rev_horz_syn32(atk, dst, lsrc, hsrc, width, even);
       else
-        ref_rev_horz_syn64(atk, dst, lsrc, hsrc, width, even);
+        r1x1_rev_horz_syn64(atk, dst, lsrc, hsrc, width, even);
+    }
+
+    static void r1x1_rev_vert_ana32(line_buf* even, line_buf* odd, ui32 width)
+    {
+      ojph_unused(even);
+      ojph_unused(odd);
+      ojph_unused(width);
+    }
+
+    static void r1x1_rev_vert_ana64(line_buf* even, line_buf* odd, ui32 width)
+    {
+      ojph_unused(even);
+      ojph_unused(odd);
+      ojph_unused(width);
+    }
+
+    void r1x1_rev_vert_ana(line_buf* even, line_buf* odd, ui32 width)
+    {
+      if (even->flags & line_buf::LFT_32BIT)
+        r1x1_rev_vert_ana32(even, odd, width);
+      else
+        r1x1_rev_vert_ana64(even, odd, width);
+    }
+
+    static void r1x1_rev_vert_syn32(line_buf* L, line_buf* H, ui32 width)
+    {
+      ojph_unused(L);
+      ojph_unused(H);
+      ojph_unused(width);
+    }
+
+    static void r1x1_rev_vert_syn64(line_buf* L, line_buf* H, ui32 width)
+    {
+      ojph_unused(L);
+      ojph_unused(H);
+      ojph_unused(width);
+    }
+
+    void r1x1_rev_vert_syn(line_buf* L, line_buf* H, ui32 width)
+    {
+      if (L->flags & line_buf::LFT_32BIT)
+        r1x1_rev_vert_syn32(L, H, width);
+      else
+        r1x1_rev_vert_syn64(L, H, width);
     }
 
     //////////////////////////////////////////////////////////////////////////
