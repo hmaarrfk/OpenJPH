@@ -433,7 +433,7 @@ namespace ojph {
       }
 
       ////////////////////////////////////////
-      void set_r1x1(bool enable)
+      void set_wavelet_oneXone(bool enable)
       {
         assert(type == UNDEFINED || type == COD_MAIN || type == COC_MAIN);
         if (enable)
@@ -539,7 +539,7 @@ namespace ojph {
       ui8 get_wavelet_kern() const
       { return SPcod.wavelet_trans; }
 
-      bool is_using_r1x1() const
+      bool is_using_wavelet_oneXone() const
       { return SPcod.wavelet_trans == DWT_R1X1; }
 
       ////////////////////////////////////////

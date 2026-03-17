@@ -362,7 +362,7 @@ bool get_arguments(int argc, char *argv[], char *&input_filename,
                    char *&output_filename, char *&progression_order,
                    char *&profile_string, ojph::ui32 &num_decompositions,
                    float &quantization_step, bool &reversible,
-                   bool &r1x1, int &employ_color_transform,
+                   bool &wavelet_oneXone, int &employ_color_transform,
                    const int max_num_precincts, int &num_precincts,
                    ojph::size *precinct_size, ojph::size& block_size,
                    ojph::size& dims, ojph::point& image_offset,
@@ -384,7 +384,7 @@ bool get_arguments(int argc, char *argv[], char *&input_filename,
   interpreter.reinterpret("-num_decomps", num_decompositions);
   interpreter.reinterpret("-qstep", quantization_step);
   interpreter.reinterpret("-reversible", reversible);
-  interpreter.reinterpret("-r1x1", r1x1);
+  interpreter.reinterpret("-wavelet_oneXone", wavelet_oneXone);
   interpreter.reinterpret_to_bool("-colour_trans", employ_color_transform);
   interpreter.reinterpret("-num_comps", num_comps);
   interpreter.reinterpret("-tlm_marker", tlm_marker);
@@ -496,7 +496,7 @@ int main(int argc, char * argv[]) {
   ojph::ui32 num_decompositions = 5;
   float quantization_step = -1.0f;
   bool reversible = false;
-  bool r1x1 = false;
+  bool wavelet_oneXone = false;
   int employ_color_transform = -1;
 
   const int max_precinct_sizes = 33; //maximum number of decompositions is 32
@@ -545,9 +545,10 @@ int main(int argc, char * argv[]) {
     "               transform; if 'true', a reversible compression is\n"
     "               performed, where the 5/3 wavelet is used.\n"
     "               Default value is 'false'.\n"
-    " -r1x1         <true | false> If 'true', use the identity (R1X1)\n"
+    " -wavelet_oneXone <true | false> If 'true', use the identity (1x1)\n"
     "               wavelet so that each level's LL equals 2^level\n"
-    "               subsampling. Requires -reversible true. Default 'false'.\n"
+    "               subsampling. Currently requires -reversible true.\n"
+    "               Default 'false'.\n"
     " -colour_trans <true | false> This option employs a color transform,\n"
     "               to transform RGB color images into the YUV domain.\n"
     "               This option should NOT be used with YUV images, because\n"
@@ -623,7 +624,7 @@ int main(int argc, char * argv[]) {
   }
   if (!get_arguments(argc, argv, input_filename, output_filename,
                      prog_order, profile_string, num_decompositions,
-                     quantization_step, reversible, r1x1, employ_color_transform,
+                     quantization_step, reversible, wavelet_oneXone, employ_color_transform,
                      max_precinct_sizes, num_precincts, precinct_size,
                      block_size, dims, image_offset, tile_size, tile_offset,
                      max_num_comps, num_components,
@@ -635,8 +636,8 @@ int main(int argc, char * argv[]) {
     return -1;
   }
 
-  if (r1x1 && !reversible)
-    OJPH_ERROR(0x01000009, "-r1x1 requires -reversible true");
+  if (wavelet_oneXone && !reversible)
+    OJPH_ERROR(0x01000009, "-wavelet_oneXone requires -reversible true");
 
   clock_t begin = clock();
 
@@ -688,8 +689,8 @@ int main(int argc, char * argv[]) {
         cod.set_progression_order(prog_order);
         cod.set_color_transform(false);
         cod.set_reversible(reversible);
-        if (r1x1)
-          cod.set_r1x1(true);
+        if (wavelet_oneXone)
+          cod.set_wavelet_oneXone(true);
         if (!reversible && quantization_step != -1.0f)
           codestream.access_qcd().set_irrev_quant(quantization_step);
         if (profile_string[0] != '\0')
@@ -746,8 +747,8 @@ int main(int argc, char * argv[]) {
         else
           cod.set_color_transform(employ_color_transform == 1);
         cod.set_reversible(reversible);
-        if (r1x1)
-          cod.set_r1x1(true);
+        if (wavelet_oneXone)
+          cod.set_wavelet_oneXone(true);
         if (!reversible && quantization_step != -1.0f)
           codestream.access_qcd().set_irrev_quant(quantization_step);
         codestream.set_planar(false);
@@ -828,8 +829,8 @@ int main(int argc, char * argv[]) {
             cod.set_color_transform(employ_color_transform == 1);
         }
         cod.set_reversible(reversible);
-        if (r1x1)
-          cod.set_r1x1(true);
+        if (wavelet_oneXone)
+          cod.set_wavelet_oneXone(true);
         if (!reversible) {
           const float min_step = 1.0f / 16384.0f;
           if (quantization_step == -1.0f)
@@ -906,8 +907,8 @@ int main(int argc, char * argv[]) {
         else
           cod.set_color_transform(employ_color_transform == 1);
         cod.set_reversible(reversible);
-        if (r1x1)
-          cod.set_r1x1(true);
+        if (wavelet_oneXone)
+          cod.set_wavelet_oneXone(true);
         if (!reversible && quantization_step != -1)
           codestream.access_qcd().set_irrev_quant(quantization_step);
         codestream.set_planar(false);
@@ -993,8 +994,8 @@ int main(int argc, char * argv[]) {
             "the next component;  this requires buffering components outside"
             " of the OpenJPH library");
         cod.set_reversible(reversible);
-        if (r1x1)
-          cod.set_r1x1(true);
+        if (wavelet_oneXone)
+          cod.set_wavelet_oneXone(true);
         if (!reversible && quantization_step != -1.0f)
           codestream.access_qcd().set_irrev_quant(quantization_step);
         codestream.set_planar(true);
@@ -1047,8 +1048,8 @@ int main(int argc, char * argv[]) {
             "color transform is meaningless since .raw files are single "
             "component files");
         cod.set_reversible(reversible);
-        if (r1x1)
-          cod.set_r1x1(true);
+        if (wavelet_oneXone)
+          cod.set_wavelet_oneXone(true);
         if (!reversible && quantization_step != -1.0f)
           codestream.access_qcd().set_irrev_quant(quantization_step);
         codestream.set_planar(true);
@@ -1089,8 +1090,8 @@ int main(int argc, char * argv[]) {
         else
           cod.set_color_transform(employ_color_transform == 1);
         cod.set_reversible(reversible);
-        if (r1x1)
-          cod.set_r1x1(true);
+        if (wavelet_oneXone)
+          cod.set_wavelet_oneXone(true);
         if (!reversible && quantization_step != -1)
           codestream.access_qcd().set_irrev_quant(quantization_step);
         codestream.set_planar(false);

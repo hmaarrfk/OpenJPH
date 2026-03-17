@@ -111,7 +111,7 @@ namespace ojph {
     void set_progression_order(const char *name);
     void set_color_transform(bool color_transform);
     void set_reversible(bool reversible);
-    void set_r1x1(bool enable);
+    void set_wavelet_oneXone(bool enable);
     param_coc get_coc(ui32 component_idx);
 
     ui32 get_num_decompositions() const;
@@ -124,7 +124,7 @@ namespace ojph {
     const char* get_progression_order_as_string() const;
     int get_num_layers() const;
     bool is_using_color_transform() const;
-    bool is_using_r1x1() const;
+    bool is_using_wavelet_oneXone() const;
     bool packets_may_use_sop() const;
     bool packets_use_eph() const;
     bool get_block_vertical_causality() const;

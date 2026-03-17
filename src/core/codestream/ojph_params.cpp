@@ -251,9 +251,9 @@ namespace ojph {
   }
 
   ////////////////////////////////////////////////////////////////////////////
-  void param_cod::set_r1x1(bool enable)
+  void param_cod::set_wavelet_oneXone(bool enable)
   {
-    state->set_r1x1(enable);
+    state->set_wavelet_oneXone(enable);
   }
 
   ////////////////////////////////////////////////////////////////////////////
@@ -289,9 +289,9 @@ namespace ojph {
     return state->is_reversible();
   }
 
-  bool param_cod::is_using_r1x1() const
+  bool param_cod::is_using_wavelet_oneXone() const
   {
-    return state->is_using_r1x1();
+    return state->is_using_wavelet_oneXone();
   }
 
   ////////////////////////////////////////////////////////////////////////////

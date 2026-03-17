@@ -643,7 +643,7 @@ namespace ojph {
       if (!cod.write(file))
         OJPH_ERROR(0x00030025, "Error writing to file");
 
-      if (cod.is_using_r1x1())
+      if (cod.is_using_wavelet_oneXone())
       {
         param_atk* p = atk.get_atk(2);
         if (p && !p->write(file))
