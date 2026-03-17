@@ -103,6 +103,34 @@ namespace ojph {
       (const param_atk* atk, const line_buf* dst, const line_buf* lsrc,
         const line_buf* hsrc, ui32 width, bool even) = NULL;
 
+    // Forward declarations for irreversible 1x1 identity kernels
+    static void wavelet_oneXone_irv_horz_ana32(const param_atk*,
+                                               const line_buf*,
+                                               const line_buf*,
+                                               const line_buf*,
+                                               ui32,
+                                               bool);
+    static void wavelet_oneXone_irv_horz_syn32(const param_atk*,
+                                               const line_buf*,
+                                               const line_buf*,
+                                               const line_buf*,
+                                               ui32,
+                                               bool);
+
+    static void (*saved_irv_horz_ana)
+      (const param_atk*, const line_buf*, const line_buf*, const line_buf*,
+       ui32, bool) = NULL;
+    static void (*saved_irv_horz_syn)
+      (const param_atk*, const line_buf*, const line_buf*, const line_buf*,
+       ui32, bool) = NULL;
+
+    static void dispatcher_irv_horz_ana(const param_atk*, const line_buf*,
+                                        const line_buf*, const line_buf*,
+                                        ui32, bool);
+    static void dispatcher_irv_horz_syn(const param_atk*, const line_buf*,
+                                        const line_buf*, const line_buf*,
+                                        ui32, bool);
+
     //////////////////////////////////////////////////////////////////////////
     void init_wavelet_transform_functions()
     {
@@ -195,6 +223,10 @@ namespace ojph {
         saved_rev_horz_syn        = rev_horz_syn;
         rev_horz_ana              = dispatcher_rev_horz_ana;
         rev_horz_syn              = dispatcher_rev_horz_syn;
+        saved_irv_horz_ana        = irv_horz_ana;
+        saved_irv_horz_syn        = irv_horz_syn;
+        irv_horz_ana              = dispatcher_irv_horz_ana;
+        irv_horz_syn              = dispatcher_irv_horz_syn;
       });
     }
 
@@ -887,6 +919,98 @@ namespace ojph {
         r1x1_rev_vert_syn64(L, H, width);
     }
 
+    static void dispatcher_irv_horz_ana(const param_atk* atk,
+                                       const line_buf* ldst,
+                                       const line_buf* hdst,
+                                       const line_buf* src,
+                                       ui32 width,
+                                       bool even)
+    {
+      if (!atk->is_reversible() && atk->get_num_steps() == 0 &&
+          atk->get_index() == 3)
+        wavelet_oneXone_irv_horz_ana32(atk, ldst, hdst, src, width, even);
+      else
+        saved_irv_horz_ana(atk, ldst, hdst, src, width, even);
+    }
+
+    static void dispatcher_irv_horz_syn(const param_atk* atk,
+                                       const line_buf* dst,
+                                       const line_buf* lsrc,
+                                       const line_buf* hsrc,
+                                       ui32 width,
+                                       bool even)
+    {
+      if (!atk->is_reversible() && atk->get_num_steps() == 0 &&
+          atk->get_index() == 3)
+        wavelet_oneXone_irv_horz_syn32(atk, dst, lsrc, hsrc, width, even);
+      else
+        saved_irv_horz_syn(atk, dst, lsrc, hsrc, width, even);
+    }
+
+    static void wavelet_oneXone_irv_horz_ana32(const param_atk* atk,
+                                               const line_buf* ldst,
+                                               const line_buf* hdst,
+                                               const line_buf* src,
+                                               ui32 width,
+                                               bool even)
+    {
+      ojph_unused(atk);
+      if (width == 0)
+        return;
+
+      const float* sp = src->f32;
+      float* lp = ldst->f32;
+      float* hp = hdst->f32;
+      ui32 w = width;
+
+      if (!even)
+      {
+        *hp++ = *sp++;
+        --w;
+      }
+
+      for (; w > 1; w -= 2)
+      {
+        *lp++ = *sp++;
+        *hp++ = *sp++;
+      }
+
+      if (w)
+        *lp++ = *sp++;
+    }
+
+    static void wavelet_oneXone_irv_horz_syn32(const param_atk* atk,
+                                               const line_buf* dst,
+                                               const line_buf* lsrc,
+                                               const line_buf* hsrc,
+                                               ui32 width,
+                                               bool even)
+    {
+      ojph_unused(atk);
+      if (width == 0)
+        return;
+
+      float* dp = dst->f32;
+      const float* lp = lsrc->f32;
+      const float* hp = hsrc->f32;
+      ui32 w = width;
+
+      if (!even)
+      {
+        *dp++ = *hp++;
+        --w;
+      }
+
+      for (; w > 1; w -= 2)
+      {
+        *dp++ = *lp++;
+        *dp++ = *hp++;
+      }
+
+      if (w)
+        *dp++ = *lp++;
+    }
+
     //////////////////////////////////////////////////////////////////////////
     void gen_irv_vert_step(const lifting_step* s, const line_buf* sig, 
                            const line_buf* other, const line_buf* aug, 
@@ -949,15 +1073,15 @@ namespace ojph {
           lp[-1] = lp[0];
           lp[l_width] = lp[l_width - 1];
           // lifting step
-          const float* sp = lp + (even ? 1 : 0);
+          const float* sp2 = lp + (even ? 1 : 0);
           float* dp = hp;
-          for (ui32 i = h_width; i > 0; --i, sp++, dp++)
-            *dp += a * (sp[-1] + sp[0]);
+          for (ui32 i = h_width; i > 0; --i, sp2++, dp++)
+            *dp += a * (sp2[-1] + sp2[0]);
 
           // swap buffers
           float* t = lp; lp = hp; hp = t;
           even = !even;
-          ui32 w = l_width; l_width = h_width; h_width = w;
+          ui32 w2 = l_width; l_width = h_width; h_width = w2;
         }
 
         {
@@ -1018,15 +1142,15 @@ namespace ojph {
           oth[-1] = oth[0];
           oth[oth_width] = oth[oth_width - 1];
           // lifting step
-          const float* sp = oth + (ev ? 0 : 1);
+          const float* sp2 = oth + (ev ? 0 : 1);
           float* dp = aug;
-          for (ui32 i = aug_width; i > 0; --i, sp++, dp++)
-            *dp -= a * (sp[-1] + sp[0]);
+          for (ui32 i = aug_width; i > 0; --i, sp2++, dp++)
+            *dp -= a * (sp2[-1] + sp2[0]);
 
           // swap buffers
           float* t = aug; aug = oth; oth = t;
           ev = !ev;
-          ui32 w = aug_width; aug_width = oth_width; oth_width = w;
+          ui32 w2 = aug_width; aug_width = oth_width; oth_width = w2;
         }
 
         // combine both lsrc and hsrc into dst

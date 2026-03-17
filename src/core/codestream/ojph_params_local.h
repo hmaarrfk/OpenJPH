@@ -408,6 +408,7 @@ namespace ojph {
         DWT_IRV97 = 0,
         DWT_REV53 = 1,
         DWT_R1X1  = 2,
+        DWT_WAVELET_ONEXONE_IRR = 3,
       };
 
     public: // COD_MAIN and COC_MAIN common functions
@@ -437,7 +438,12 @@ namespace ojph {
       {
         assert(type == UNDEFINED || type == COD_MAIN || type == COC_MAIN);
         if (enable)
-          SPcod.wavelet_trans = DWT_R1X1;
+        {
+          if (is_reversible())
+            SPcod.wavelet_trans = DWT_R1X1;
+          else
+            SPcod.wavelet_trans = DWT_WAVELET_ONEXONE_IRR;
+        }
       }
 
       ////////////////////////////////////////
@@ -1184,6 +1190,7 @@ namespace ojph {
       void init_irv97();
       void init_rev53();
       void init_r1x1();
+      void init_wavelet_oneXone_irrev();
       param_atk* add_object();
 
     private: // member variables

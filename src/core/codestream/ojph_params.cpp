@@ -1204,7 +1204,8 @@ namespace ojph {
             || qcd_wavelet_kern == param_cod::DWT_R1X1)
           set_rev_quant(qcd_num_decompositions, qcd_bit_depth,
             qcd_component < 3 ? employing_color_transform : false);
-        else if (qcd_wavelet_kern == param_cod::DWT_IRV97)
+        else if (qcd_wavelet_kern == param_cod::DWT_IRV97
+                 || qcd_wavelet_kern == param_cod::DWT_WAVELET_ONEXONE_IRR)
         {
           if (this->base_delta == -1.0f)
             this->base_delta = 1.0f / (float)(1 << qcd_bit_depth);
@@ -1239,7 +1240,8 @@ namespace ojph {
               || cp->get_wavelet_kern() == param_cod::DWT_R1X1)
             qp->set_rev_quant(num_decompositions, bit_depth,
               c < 3 ? employing_color_transform : false);
-          else if (cp->get_wavelet_kern() == param_cod::DWT_IRV97)
+          else if (cp->get_wavelet_kern() == param_cod::DWT_IRV97
+                   || cp->get_wavelet_kern() == param_cod::DWT_WAVELET_ONEXONE_IRR)
           {
             if (qp->base_delta == -1.0f)
               qp->base_delta = 1.0f / (float)(1 << bit_depth);
@@ -1265,7 +1267,8 @@ namespace ojph {
               || cp->get_wavelet_kern() == param_cod::DWT_R1X1)
             qp->set_rev_quant(num_decompositions, bit_depth,
               c < 3 ? employing_color_transform : false);
-          else if (cp->get_wavelet_kern() == param_cod::DWT_IRV97)
+          else if (cp->get_wavelet_kern() == param_cod::DWT_IRV97
+                   || cp->get_wavelet_kern() == param_cod::DWT_WAVELET_ONEXONE_IRR)
           {
             if (qp->base_delta == -1.0f)
               qp->base_delta = 1.0f / (float)(1 << bit_depth);
@@ -2381,13 +2384,14 @@ namespace ojph {
         if (index == 0) { this->init_irv97(); return this; }
         else if (index == 1) { this->init_rev53(); return this; }
         else if (index == 2) { this->init_r1x1(); return this; }
+        else if (index == 3) { this->init_wavelet_oneXone_irrev(); return this; }
       }
 
       param_atk* p = this;
       while (p && p->get_index() != index)
         p = p->next;
 
-      if (p == NULL && (index == 0 || index == 1 || index == 2))
+      if (p == NULL && (index == 0 || index == 1 || index == 2 || index == 3))
       {
         p = add_object();
         if (index == 0)
@@ -2396,6 +2400,8 @@ namespace ojph {
           p->init_rev53();
         else if (index == 2)
           p->init_r1x1();
+        else if (index == 3)
+          p->init_wavelet_oneXone_irrev();
       }
 
       return p;
@@ -2621,6 +2627,15 @@ namespace ojph {
     void param_atk::init_r1x1()
     {
       Satk = 0x5802;
+      Natk = 0;
+      Latk = 5;
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    void param_atk::init_wavelet_oneXone_irrev()
+    {
+      Satk = 0x5803;
+      Katk = 1.0f;
       Natk = 0;
       Latk = 5;
     }
