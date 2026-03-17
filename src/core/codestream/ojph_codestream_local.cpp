@@ -112,7 +112,6 @@ namespace ojph {
     //////////////////////////////////////////////////////////////////////////
     void codestream::pre_alloc()
     {
-      local::set_r1x1_kernel(cod.is_using_r1x1());
       ojph::param_siz sz = access_siz();
       num_tiles.w = sz.get_image_extent().x - sz.get_tile_offset().x;
       num_tiles.w = ojph_div_ceil(num_tiles.w, sz.get_tile_size().w);

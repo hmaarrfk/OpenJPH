@@ -464,7 +464,7 @@ namespace ojph {
         this->atk = cdp->access_atk();
         this->reversible = atk->is_reversible();
         this->num_steps = atk->get_num_steps();
-        this->use_r1x1 = cdp->is_using_r1x1();
+        this->use_r1x1 = (this->num_steps == 0);
         // create line buffers and lifting_bufs
         lines = allocator->post_alloc_obj<line_buf>(num_steps + 2);
         ssp = allocator->post_alloc_obj<lifting_buf>(num_steps + 2);

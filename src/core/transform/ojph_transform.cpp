@@ -56,6 +56,11 @@ namespace ojph {
     static void (*saved_rev_horz_syn)(const param_atk*, const line_buf*,
       const line_buf*, const line_buf*, ui32, bool) = NULL;
 
+    static void dispatcher_rev_horz_ana(const param_atk*, const line_buf*,
+      const line_buf*, const line_buf*, ui32, bool);
+    static void dispatcher_rev_horz_syn(const param_atk*, const line_buf*,
+      const line_buf*, const line_buf*, ui32, bool);
+
     /////////////////////////////////////////////////////////////////////////
     // Reversible functions
     /////////////////////////////////////////////////////////////////////////
@@ -188,22 +193,9 @@ namespace ojph {
 #endif // !OJPH_ENABLE_WASM_SIMD
         saved_rev_horz_ana        = rev_horz_ana;
         saved_rev_horz_syn        = rev_horz_syn;
+        rev_horz_ana              = dispatcher_rev_horz_ana;
+        rev_horz_syn              = dispatcher_rev_horz_syn;
       });
-    }
-
-    void set_r1x1_kernel(bool enable)
-    {
-      init_wavelet_transform_functions();
-      if (enable)
-      {
-        rev_horz_ana = r1x1_rev_horz_ana;
-        rev_horz_syn = r1x1_rev_horz_syn;
-      }
-      else if (saved_rev_horz_ana != NULL && saved_rev_horz_syn != NULL)
-      {
-        rev_horz_ana = saved_rev_horz_ana;
-        rev_horz_syn = saved_rev_horz_syn;
-      }
     }
 
     //////////////////////////////////////////////////////////////////////////
@@ -823,6 +815,32 @@ namespace ojph {
         r1x1_rev_horz_syn32(atk, dst, lsrc, hsrc, width, even);
       else
         r1x1_rev_horz_syn64(atk, dst, lsrc, hsrc, width, even);
+    }
+
+    static void dispatcher_rev_horz_ana(const param_atk* atk,
+                                       const line_buf* ldst,
+                                       const line_buf* hdst,
+                                       const line_buf* src,
+                                       ui32 width,
+                                       bool even)
+    {
+      if (atk->get_num_steps() == 0)
+        r1x1_rev_horz_ana(atk, ldst, hdst, src, width, even);
+      else
+        saved_rev_horz_ana(atk, ldst, hdst, src, width, even);
+    }
+
+    static void dispatcher_rev_horz_syn(const param_atk* atk,
+                                       const line_buf* dst,
+                                       const line_buf* lsrc,
+                                       const line_buf* hsrc,
+                                       ui32 width,
+                                       bool even)
+    {
+      if (atk->get_num_steps() == 0)
+        r1x1_rev_horz_syn(atk, dst, lsrc, hsrc, width, even);
+      else
+        saved_rev_horz_syn(atk, dst, lsrc, hsrc, width, even);
     }
 
     static void r1x1_rev_vert_ana32(line_buf* even, line_buf* odd, ui32 width)

@@ -84,8 +84,6 @@ namespace ojph {
     void r1x1_rev_vert_ana(line_buf* even, line_buf* odd, ui32 width);
     void r1x1_rev_vert_syn(line_buf* L, line_buf* H, ui32 width);
 
-    void set_r1x1_kernel(bool enable);
-
     /////////////////////////////////////////////////////////////////////////
     // Irreversible functions
     /////////////////////////////////////////////////////////////////////////
