@@ -30,10 +30,90 @@
 // SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //***************************************************************************/
 
+#include <vector>
+
 #include "ojph_arch.h"
 #include "ojph_mem.h"
+#include "ojph_codestream.h"
+#include "ojph_file.h"
+#include "ojph_params.h"
 #include "../src/core/transform/ojph_transform.h"
 #include "gtest/gtest.h"
+
+namespace {
+
+ojph::si32 circle_sample(ojph::ui32 x, ojph::ui32 y, ojph::ui32 width,
+                         ojph::ui32 height, ojph::si32 radius)
+{
+  const ojph::si32 cx = (ojph::si32)(width / 2);
+  const ojph::si32 cy = (ojph::si32)(height / 2);
+  const ojph::si32 dx = (ojph::si32)x - cx;
+  const ojph::si32 dy = (ojph::si32)y - cy;
+  if (dx * dx + dy * dy <= radius * radius)
+    return 128;
+  return 0;
+}
+
+std::vector<ojph::ui8> encode_circle_to_memory(const std::vector<ojph::si32>& full_plane,
+                                               ojph::ui32 width,
+                                               ojph::ui32 height,
+                                               ojph::ui32 num_decompositions,
+                                               bool use_r1x1_wavelet)
+{
+  using namespace ojph;
+
+  mem_outfile encoded;
+  encoded.open(65536u, false);
+
+  {
+    codestream writer;
+    param_siz siz = writer.access_siz();
+    siz.set_image_extent(point(width, height));
+    siz.set_num_components(1);
+    siz.set_component(0, point(1, 1), 8, false);
+    siz.set_image_offset(point(0, 0));
+    siz.set_tile_size(size(width, height));
+    siz.set_tile_offset(point(0, 0));
+
+    param_cod cod = writer.access_cod();
+    cod.set_num_decomposition(num_decompositions);
+    cod.set_block_dims(64, 64);
+    cod.set_progression_order("RLCP");
+    cod.set_color_transform(false);
+    cod.set_reversible(true);
+    if (use_r1x1_wavelet)
+      cod.set_wavelet_oneXone(true);
+
+    writer.set_planar(false);
+    writer.set_tilepart_divisions(false, false);
+    writer.request_tlm_marker(false);
+    writer.write_headers(&encoded, NULL, 0);
+
+    ui32 next_comp = 0;
+    line_buf* row_line = writer.exchange(NULL, next_comp);
+    const ui32 enc_height =
+      siz.get_image_extent().y - siz.get_image_offset().y;
+    const ui32 enc_width =
+      siz.get_image_extent().x - siz.get_image_offset().x;
+
+    for (ui32 row = 0; row < enc_height; ++row) {
+      si32* dst = row_line->i32;
+      const si32* src_row = full_plane.data() + (size_t)row * width;
+      for (ui32 x = 0; x < enc_width; ++x)
+        dst[x] = src_row[x];
+      row_line = writer.exchange(row_line, next_comp);
+    }
+    writer.flush();
+    writer.close();
+  }
+
+  std::vector<ui8> bytes(encoded.get_data(),
+                         encoded.get_data() + encoded.get_used_size());
+  encoded.close();
+  return bytes;
+}
+
+} // namespace
 
 TEST(R1X1Wavelet, HorzRoundTripEvenAligned) {
   using namespace ojph;
@@ -60,55 +140,133 @@ TEST(R1X1Wavelet, HorzRoundTripEvenAligned) {
     EXPECT_EQ(dst_buf[i], src_buf[i]);
 }
 
-TEST(R1X1Wavelet, IrreversibleOneXoneQstepDegradesGracefully) {
+TEST(R1X1Wavelet, CircleMemoryDecodeMatchesGridSubsample) {
   using namespace ojph;
 
-  const int width = 128;
-  float src_buf[width];
-  float low_buf[width];
-  float high_buf[width];
-  float recon_buf[width];
+  const ui32 width = 512;
+  const ui32 height = 512;
+  const si32 radius = 150;
+  const ui32 num_decompositions = 5;
 
-  for (int i = 0; i < width; ++i)
-    src_buf[i] = static_cast<float>((i * 3) & 0xFF);
+  std::vector<si32> full_plane((size_t)width * (size_t)height);
+  for (ui32 y = 0; y < height; ++y)
+    for (ui32 x = 0; x < width; ++x)
+      full_plane[(size_t)y * width + x] =
+        circle_sample(x, y, width, height, radius);
 
-  line_buf src;
-  line_buf ldst;
-  line_buf hdst;
-  line_buf dst;
+  std::vector<ui8> codestream_bytes =
+    encode_circle_to_memory(full_plane, width, height, num_decompositions,
+                            true);
 
-  src.wrap(src_buf, width, sizeof(float));
-  ldst.wrap(low_buf, width, sizeof(float));
-  hdst.wrap(high_buf, width, sizeof(float));
-  dst.wrap(recon_buf, width, sizeof(float));
+  for (ui32 level = 0; level <= num_decompositions; ++level) {
+    mem_infile reader_file;
+    reader_file.open(codestream_bytes.data(), codestream_bytes.size());
 
-  local::param_atk atk_state;
-  local::param_atk* atk = atk_state.get_atk(3);
-  ASSERT_NE(atk, nullptr);
-  EXPECT_FALSE(atk->is_reversible());
-  EXPECT_EQ(atk->get_num_steps(), 0u);
+    codestream reader;
+    reader.set_planar(false);
+    reader.read_headers(&reader_file);
+    reader.restrict_input_resolution(level, level);
+    reader.create();
 
-  auto compute_mse = [&](float qstep) {
-    local::param_qcd qcd_state;
-    qcd_state.set_irrev_quant(1);
-    ojph_unused(qcd_state);
+    param_siz rsiz = reader.access_siz();
+    const ui32 recon_w = rsiz.get_recon_width(0);
+    const ui32 recon_h = rsiz.get_recon_height(0);
+    ASSERT_EQ(recon_w, width >> level);
+    ASSERT_EQ(recon_h, height >> level);
 
-    local::irv_horz_ana(atk, &ldst, &hdst, &src, width, true);
-    for (int i = 0; i < width; ++i)
-      low_buf[i] = std::round(low_buf[i] / qstep) * qstep;
-    local::irv_horz_syn(atk, &dst, &ldst, &hdst, width, true);
-
-    double se = 0.0;
-    for (int i = 0; i < width; ++i) {
-      double d = static_cast<double>(src_buf[i]) -
-                 static_cast<double>(recon_buf[i]);
-      se += d * d;
+    for (ui32 row = 0; row < recon_h; ++row) {
+      ui32 comp_num = 0;
+      line_buf* line = reader.pull(comp_num);
+      ASSERT_EQ(comp_num, 0u);
+      const si32* samples = line->i32;
+      const ui32 src_y = row << level;
+      for (ui32 col = 0; col < recon_w; ++col) {
+        const ui32 src_x = col << level;
+        const si32 expected =
+          full_plane[(size_t)src_y * width + src_x];
+        EXPECT_EQ(samples[col], expected)
+          << "level=" << level << " row=" << row << " col=" << col;
+      }
     }
-    return static_cast<double>(se / width);
-  };
+    reader.close();
+    reader_file.close();
+  }
+}
 
-  double mse_small = compute_mse(1.0f);
-  double mse_large = compute_mse(4.0f);
+TEST(R1X1Wavelet, CircleRev53CoarseLevelDiffersFromGridSubsample) {
+  using namespace ojph;
 
-  EXPECT_LE(mse_small, mse_large);
+  const ui32 width = 512;
+  const ui32 height = 512;
+  const si32 radius = 150;
+  const ui32 num_decompositions = 5;
+
+  std::vector<si32> full_plane((size_t)width * (size_t)height);
+  for (ui32 y = 0; y < height; ++y)
+    for (ui32 x = 0; x < width; ++x)
+      full_plane[(size_t)y * width + x] =
+        circle_sample(x, y, width, height, radius);
+
+  const std::vector<ui8> codestream_bytes =
+    encode_circle_to_memory(full_plane, width, height, num_decompositions,
+                            false);
+
+  {
+    mem_infile reader_file;
+    reader_file.open(codestream_bytes.data(), codestream_bytes.size());
+    codestream reader;
+    reader.set_planar(false);
+    reader.read_headers(&reader_file);
+    reader.restrict_input_resolution(0, 0);
+    reader.create();
+    param_siz rsiz = reader.access_siz();
+    ASSERT_EQ(rsiz.get_recon_width(0), width);
+    ASSERT_EQ(rsiz.get_recon_height(0), height);
+    for (ui32 row = 0; row < height; ++row) {
+      ui32 comp_num = 0;
+      line_buf* line = reader.pull(comp_num);
+      const si32* samples = line->i32;
+      for (ui32 col = 0; col < width; ++col)
+        EXPECT_EQ(samples[col], full_plane[(size_t)row * width + col])
+          << "row=" << row << " col=" << col;
+    }
+    reader.close();
+    reader_file.close();
+  }
+
+  bool mismatch_versus_grid_subsample_at_some_level = false;
+  for (ui32 level = 1; level <= num_decompositions; ++level) {
+    mem_infile reader_file;
+    reader_file.open(codestream_bytes.data(), codestream_bytes.size());
+    codestream reader;
+    reader.set_planar(false);
+    reader.read_headers(&reader_file);
+    reader.restrict_input_resolution(level, level);
+    reader.create();
+    param_siz rsiz = reader.access_siz();
+    const ui32 recon_w = rsiz.get_recon_width(0);
+    const ui32 recon_h = rsiz.get_recon_height(0);
+    ASSERT_EQ(recon_w, width >> level);
+    ASSERT_EQ(recon_h, height >> level);
+    for (ui32 row = 0; row < recon_h && !mismatch_versus_grid_subsample_at_some_level;
+         ++row) {
+      ui32 comp_num = 0;
+      line_buf* line = reader.pull(comp_num);
+      const si32* samples = line->i32;
+      const ui32 src_y = row << level;
+      for (ui32 col = 0; col < recon_w; ++col) {
+        const ui32 src_x = col << level;
+        const si32 grid_value =
+          full_plane[(size_t)src_y * width + src_x];
+        if (samples[col] != grid_value) {
+          mismatch_versus_grid_subsample_at_some_level = true;
+          break;
+        }
+      }
+    }
+    reader.close();
+    reader_file.close();
+  }
+
+  EXPECT_TRUE(mismatch_versus_grid_subsample_at_some_level);
 }
