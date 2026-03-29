@@ -82,7 +82,7 @@ std::vector<ojph::ui8> encode_circle_to_memory(const std::vector<ojph::si32>& fu
     cod.set_color_transform(false);
     cod.set_reversible(true);
     if (use_r1x1_wavelet)
-      cod.set_wavelet_oneXone(true);
+      cod.set_r1x1(true);
 
     writer.set_planar(false);
     writer.set_tilepart_divisions(false, false);

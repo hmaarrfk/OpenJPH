@@ -251,9 +251,9 @@ namespace ojph {
   }
 
   ////////////////////////////////////////////////////////////////////////////
-  void param_cod::set_wavelet_oneXone(bool enable)
+  void param_cod::set_r1x1(bool enable)
   {
-    state->set_wavelet_oneXone(enable);
+    state->set_r1x1(enable);
   }
 
   ////////////////////////////////////////////////////////////////////////////
@@ -289,9 +289,9 @@ namespace ojph {
     return state->is_reversible();
   }
 
-  bool param_cod::is_using_wavelet_oneXone() const
+  bool param_cod::is_using_r1x1() const
   {
-    return state->is_using_wavelet_oneXone();
+    return state->is_using_r1x1();
   }
 
   ////////////////////////////////////////////////////////////////////////////
@@ -858,7 +858,7 @@ namespace ojph {
       return SPcod.wavelet_trans == local::param_cod::DWT_R1X1;
     }
 
-    bool param_cod::is_using_wavelet_oneXone() const
+    bool param_cod::is_using_r1x1() const
     {
       if (atk != NULL)
         return atk->get_num_steps() == 0 && atk->is_reversible();
