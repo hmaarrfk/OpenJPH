@@ -39,7 +39,7 @@
 #ifndef OJPH_TRANSFORM_H
 #define OJPH_TRANSFORM_H
 
-#include "ojph_defs.h"
+#include "ojph_arch.h"
 
 namespace ojph {
 
@@ -72,11 +72,11 @@ namespace ojph {
       (const param_atk* atk, const line_buf* dst, const line_buf* lsrc,
         const line_buf* hsrc, ui32 width, bool even);
 
-    void r1x1_rev_horz_ana(const param_atk* atk,
+    OJPH_EXPORT void r1x1_rev_horz_ana(const param_atk* atk,
                           const line_buf* ldst, const line_buf* hdst,
                           const line_buf* src, ui32 width, bool even);
 
-    void r1x1_rev_horz_syn(const param_atk* atk,
+    OJPH_EXPORT void r1x1_rev_horz_syn(const param_atk* atk,
                            const line_buf* dst,
                            const line_buf* lsrc, const line_buf* hsrc,
                            ui32 width, bool even);

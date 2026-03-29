@@ -115,7 +115,7 @@ std::vector<ojph::ui8> encode_circle_to_memory(const std::vector<ojph::si32>& fu
 
 } // namespace
 
-TEST(R1X1Wavelet, HorzRoundTripEvenAligned) {
+TEST(TestExecutables, R1x1WaveletHorzRoundTripEvenAligned) {
   using namespace ojph;
 
   si32 src_buf[4] = {1, 2, 3, 4};
@@ -140,7 +140,7 @@ TEST(R1X1Wavelet, HorzRoundTripEvenAligned) {
     EXPECT_EQ(dst_buf[i], src_buf[i]);
 }
 
-TEST(R1X1Wavelet, CircleMemoryDecodeMatchesGridSubsample) {
+TEST(TestExecutables, R1x1WaveletCircleMemoryDecodeMatchesGridSubsample) {
   using namespace ojph;
 
   const ui32 width = 512;
@@ -193,7 +193,7 @@ TEST(R1X1Wavelet, CircleMemoryDecodeMatchesGridSubsample) {
   }
 }
 
-TEST(R1X1Wavelet, CircleRev53CoarseLevelDiffersFromGridSubsample) {
+TEST(TestExecutables, R1x1WaveletCircleRev53CoarseLevelDiffersFromGridSubsample) {
   using namespace ojph;
 
   const ui32 width = 512;
