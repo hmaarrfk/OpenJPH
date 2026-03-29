@@ -19,13 +19,29 @@ jobs:
           actions-cache-folder: 'emsdk-cache'
 
       - name: Build non-SIMD and Debug
-        run: bash scripts/ci-emcc-build.sh ON Debug
+        run: |
+          cd build
+          emcmake cmake .. --fresh -DOJPH_DISABLE_SIMD=ON -DCMAKE_BUILD_TYPE=Debug
+          cmake --build . --config Debug --clean-first
+          cd ..
 
       - name: Build non-SIMD and Release
-        run: bash scripts/ci-emcc-build.sh ON Release
+        run: |
+          cd build
+          emcmake cmake .. --fresh -DOJPH_DISABLE_SIMD=ON -DCMAKE_BUILD_TYPE=Release
+          cmake --build . --config Release --clean-first
+          cd ..
 
       - name: Build SIMD and Debug
-        run: bash scripts/ci-emcc-build.sh OFF Debug
+        run: |
+          cd build
+          emcmake cmake .. --fresh -DOJPH_DISABLE_SIMD=OFF -DCMAKE_BUILD_TYPE=Debug
+          cmake --build . --config Debug --clean-first
+          cd ..
 
       - name: Build SIMD and Release
-        run: bash scripts/ci-emcc-build.sh OFF Release
+        run: |
+          cd build
+          emcmake cmake .. --fresh -DOJPH_DISABLE_SIMD=OFF -DCMAKE_BUILD_TYPE=Release
+          cmake --build . --config Release --clean-first
+          cd ..
