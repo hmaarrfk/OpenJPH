@@ -826,7 +826,7 @@ namespace ojph {
                                        ui32 width,
                                        bool even)
     {
-      if (atk->get_num_steps() == 0)
+      if (atk->is_lossless_identity_transform())
         r1x1_rev_horz_ana(atk, ldst, hdst, src, width, even);
       else
         saved_rev_horz_ana(atk, ldst, hdst, src, width, even);
@@ -839,7 +839,7 @@ namespace ojph {
                                        ui32 width,
                                        bool even)
     {
-      if (atk->get_num_steps() == 0)
+      if (atk->is_lossless_identity_transform())
         r1x1_rev_horz_syn(atk, dst, lsrc, hsrc, width, even);
       else
         saved_rev_horz_syn(atk, dst, lsrc, hsrc, width, even);

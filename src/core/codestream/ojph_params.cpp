@@ -853,16 +853,16 @@ namespace ojph {
     {
       if (SPcod.wavelet_trans <= 1)
         return get_wavelet_kern() == local::param_cod::DWT_REV53;
-      if (atk != NULL)
-        return atk->is_reversible();
-      return SPcod.wavelet_trans == local::param_cod::DWT_R1X1;
+      if (atk == NULL)
+        return false;
+      return atk->is_reversible();
     }
 
     bool param_cod::is_using_r1x1() const
     {
-      if (atk != NULL)
-        return atk->get_num_steps() == 0 && atk->is_reversible();
-      return SPcod.wavelet_trans == local::param_cod::DWT_R1X1;
+      if (atk == NULL)
+        return false;
+      return atk->is_lossless_identity_transform();
     }
 
     //////////////////////////////////////////////////////////////////////////
@@ -2384,18 +2384,39 @@ namespace ojph {
       while (p && p->get_index() != index)
         p = p->next;
 
-      if (p == NULL && (index == 0 || index == 1 || index == 2))
+      if (p == NULL && (index == 0 || index == 1))
       {
         p = add_object();
         if (index == 0)
           p->init_irv97();
-        else if (index == 1)
+        else
           p->init_rev53();
-        else if (index == 2)
-          p->init_r1x1();
       }
 
       return p;
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    void param_atk::provision_encoder_atk_if_needed(ui8 wavelet_kernel_index)
+    {
+      if (wavelet_kernel_index <= 1)
+        return;
+      assert(top_atk == NULL);
+      for (param_atk* p = this; p != NULL; p = p->next)
+      {
+        if (p->Latk != 0 && p->get_index() == wavelet_kernel_index)
+          return;
+      }
+      if (wavelet_kernel_index == local::param_cod::DWT_R1X1)
+      {
+        param_atk* n = add_object();
+        n->init_r1x1();
+      }
+      else
+        OJPH_ERROR(0x00050133,
+          "Encoding with wavelet kernel index %u requires a matching ATK "
+          "definition in the codestream.",
+          wavelet_kernel_index);
     }
 
     //////////////////////////////////////////////////////////////////////////
@@ -2623,7 +2644,7 @@ namespace ojph {
     }
 
     //////////////////////////////////////////////////////////////////////////
-    bool param_atk::write(outfile_base *file)
+    bool param_atk::write(outfile_base *file) const
     {
       if (Latk == 0)
         return true;

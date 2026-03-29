@@ -114,6 +114,7 @@ namespace ojph {
     struct param_tlm;
     struct param_dfs;
     struct param_atk;
+    class codestream;
 
     //////////////////////////////////////////////////////////////////////////
     enum JP2K_MARKER : ui16
@@ -385,6 +386,7 @@ namespace ojph {
     {
       // serves for both COD and COC markers
       friend ::ojph::param_cod;
+      friend class codestream;
       enum default_comp_num : ui16 {
         OJPH_COD_UNKNOWN = 65534,
         OJPH_COD_DEFAULT = 65535
@@ -1151,7 +1153,7 @@ namespace ojph {
       }
 
       bool read(infile_base *file);
-      bool write(outfile_base *file);
+      bool write(outfile_base *file) const;
 
       ui8 get_index() const { return (ui8)(Satk & 0xFF); }
       int get_coeff_type() const { return (Satk >> 8) & 0x7; }
@@ -1164,6 +1166,11 @@ namespace ojph {
       { assert(s < Natk); return d + s; }
       ui32 get_num_steps() const { return Natk; }
       float get_K() const { return Katk; }
+
+      bool is_lossless_identity_transform() const
+      { return is_reversible() && Natk == 0; }
+
+      void provision_encoder_atk_if_needed(ui8 wavelet_kernel_index);
 
   private:
       /////////////////////////////////////
