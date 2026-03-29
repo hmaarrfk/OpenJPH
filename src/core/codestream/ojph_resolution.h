@@ -97,7 +97,6 @@ namespace ojph {
 
     private:
       bool reversible, skipped_res_for_read, skipped_res_for_recon;
-      bool use_r1x1;
       ui32 num_steps;
       ui32 res_num;
       ui32 comp_num;
