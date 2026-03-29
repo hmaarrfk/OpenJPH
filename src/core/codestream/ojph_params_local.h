@@ -672,7 +672,7 @@ namespace ojph {
       cod_SGcod SGCod;      // Used in COD and copied to COC
       cod_SPcod SPcod;      // serves as SPcod and SPcoc
       param_cod* next;      // to chain coc parameters to cod
-      const param_atk* atk;
+      const param_atk* atk; // used to read transform information
 
     private: // COC only variables
       param_cod* top_cod;   // parent COD structure
