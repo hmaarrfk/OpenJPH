@@ -251,6 +251,12 @@ namespace ojph {
   }
 
   ////////////////////////////////////////////////////////////////////////////
+  void param_cod::set_r1x1(bool enable)
+  {
+    state->set_r1x1(enable);
+  }
+
+  ////////////////////////////////////////////////////////////////////////////
   param_coc param_cod::get_coc(ui32 component_idx)
   {
     local::param_cod *p = state->get_coc(component_idx);
@@ -281,6 +287,11 @@ namespace ojph {
   bool param_cod::is_reversible() const
   {
     return state->is_reversible();
+  }
+
+  bool param_cod::is_using_r1x1() const
+  {
+    return state->is_using_r1x1();
   }
 
   ////////////////////////////////////////////////////////////////////////////
@@ -842,10 +853,16 @@ namespace ojph {
     {
       if (SPcod.wavelet_trans <= 1)
         return get_wavelet_kern() == local::param_cod::DWT_REV53;
-      else {
-        assert(atk != NULL);
-        return atk->is_reversible();
-      }
+      if (atk == NULL)
+        return false;
+      return atk->is_reversible();
+    }
+
+    bool param_cod::is_using_r1x1() const
+    {
+      if (atk == NULL)
+        return false;
+      return atk->is_lossless_identity_transform();
     }
 
     //////////////////////////////////////////////////////////////////////////
@@ -1189,17 +1206,16 @@ namespace ojph {
         qcd_is_signed = siz.is_signed(qcd_component);
         qcd_wavelet_kern = cod.get_wavelet_kern();
         this->num_subbands = 1 + 3 * qcd_num_decompositions;
-        if (qcd_wavelet_kern == param_cod::DWT_REV53)
+        const param_cod *qcd_cod = cod.get_coc(qcd_component);
+        if (qcd_cod->is_reversible())
           set_rev_quant(qcd_num_decompositions, qcd_bit_depth,
             qcd_component < 3 ? employing_color_transform : false);
-        else if (qcd_wavelet_kern == param_cod::DWT_IRV97)
+        else
         {
           if (this->base_delta == -1.0f)
             this->base_delta = 1.0f / (float)(1 << qcd_bit_depth);
           set_irrev_quant(qcd_num_decompositions);
         }
-        else
-          assert(0);
       }
 
       // if not all the same and captured by QCD, then create QCC for them
@@ -1223,17 +1239,15 @@ namespace ojph {
           ui32 num_decompositions = cp->get_num_decompositions();
           qp->num_subbands = 1 + 3 * num_decompositions;
           ui32 bit_depth = siz.get_bit_depth(c);
-          if (cp->get_wavelet_kern() == param_cod::DWT_REV53)
+          if (cp->is_reversible())
             qp->set_rev_quant(num_decompositions, bit_depth,
               c < 3 ? employing_color_transform : false);
-          else if (cp->get_wavelet_kern() == param_cod::DWT_IRV97)
+          else
           {
             if (qp->base_delta == -1.0f)
               qp->base_delta = 1.0f / (float)(1 << bit_depth);
             qp->set_irrev_quant(num_decompositions);
           }
-          else
-            assert(0);
         }
       }
       else if (other_comps_exist) // Some are captured by QCD
@@ -1248,17 +1262,15 @@ namespace ojph {
           ui32 num_decompositions = cp->get_num_decompositions();
           qp->num_subbands = 1 + 3 * num_decompositions;
           ui32 bit_depth = siz.get_bit_depth(c);
-          if (cp->get_wavelet_kern() == param_cod::DWT_REV53)
+          if (cp->is_reversible())
             qp->set_rev_quant(num_decompositions, bit_depth,
               c < 3 ? employing_color_transform : false);
-          else if (cp->get_wavelet_kern() == param_cod::DWT_IRV97)
+          else
           {
             if (qp->base_delta == -1.0f)
               qp->base_delta = 1.0f / (float)(1 << bit_depth);
             qp->set_irrev_quant(num_decompositions);
           }
-          else
-            assert(0);
         }
       }
     }
@@ -2374,16 +2386,37 @@ namespace ojph {
 
       if (p == NULL && (index == 0 || index == 1))
       {
-        // The index was not found, add an atk object only if the index is
-        // either 0 or 1
         p = add_object();
         if (index == 0)
           p->init_irv97();
-        else if (index == 1)
+        else
           p->init_rev53();
       }
 
       return p;
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    void param_atk::provision_encoder_atk_if_needed(ui8 wavelet_kernel_index)
+    {
+      if (wavelet_kernel_index <= 1)
+        return;
+      assert(top_atk == NULL);
+      for (param_atk* p = this; p != NULL; p = p->next)
+      {
+        if (p->Latk != 0 && p->get_index() == wavelet_kernel_index)
+          return;
+      }
+      if (wavelet_kernel_index == local::param_cod::DWT_R1X1)
+      {
+        param_atk* n = add_object();
+        n->init_r1x1();
+      }
+      else
+        OJPH_ERROR(0x00050133,
+          "Encoding with wavelet kernel index %u requires a matching ATK "
+          "definition in the codestream.",
+          wavelet_kernel_index);
     }
 
     //////////////////////////////////////////////////////////////////////////
@@ -2600,6 +2633,36 @@ namespace ojph {
       d[1].rev.Aatk = -1;
       d[1].rev.Batk = 1;
       d[1].rev.Eatk = 1;
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    void param_atk::init_r1x1()
+    {
+      Satk = 0x5802;
+      Natk = 0;
+      Latk = 5;
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    bool param_atk::write(outfile_base *file) const
+    {
+      if (Latk == 0)
+        return true;
+      ui8 buf[4];
+      *(ui16*)buf = JP2K_MARKER::ATK;
+      *(ui16*)buf = swap_byte(*(ui16*)buf);
+      if (file->write(buf, 2) != 2)
+        return false;
+      *(ui16*)buf = swap_byte(Latk);
+      if (file->write(buf, 2) != 2)
+        return false;
+      *(ui16*)buf = swap_byte(Satk);
+      if (file->write(buf, 2) != 2)
+        return false;
+      *(ui8*)buf = Natk;
+      if (file->write(buf, 1) != 1)
+        return false;
+      return true;
     }
 
     //////////////////////////////////////////////////////////////////////////

@@ -560,6 +560,8 @@ namespace ojph {
       }
       siz.check_validity();
       cod.check_validity(siz);
+      for (param_cod *pc = &cod; pc != NULL; pc = pc->next)
+        atk.provision_encoder_atk_if_needed(pc->get_wavelet_kern());
       cod.update_atk(&atk);
       qcd.check_validity(siz, cod);
       cap.check_validity(cod, qcd);
@@ -642,6 +644,21 @@ namespace ojph {
 
       if (!cod.write(file))
         OJPH_ERROR(0x00030025, "Error writing to file");
+
+      bool atk_index_written[256] = {};
+      for (param_cod *pc = &cod; pc != NULL; pc = pc->next)
+      {
+        const param_atk* pa = pc->access_atk();
+        if (pc->get_wavelet_kern() <= 1 || pa == NULL
+            || !pa->is_lossless_identity_transform())
+          continue;
+        ui8 atk_idx = pa->get_index();
+        if (atk_index_written[atk_idx])
+          continue;
+        atk_index_written[atk_idx] = true;
+        if (!pa->write(file))
+          OJPH_ERROR(0x00030025, "Error writing ATK to file");
+      }
 
       if (!cod.write_coc(file, num_comps))
         OJPH_ERROR(0x0003002E, "Error writing to file");

@@ -33,11 +33,13 @@ add_executable(
 add_executable(
   test_executables
   test_executables.cpp
+  test_r1x1_wavelet.cpp
 )
 
 target_link_libraries(
   test_executables
   GTest::gtest_main
+  openjph
 )
 
 include(GoogleTest)

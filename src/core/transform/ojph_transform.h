@@ -2,21 +2,21 @@
 // This software is released under the 2-Clause BSD license, included
 // below.
 //
-// Copyright (c) 2019, Aous Naman 
+// Copyright (c) 2019, Aous Naman
 // Copyright (c) 2019, Kakadu Software Pty Ltd, Australia
 // Copyright (c) 2019, The University of New South Wales, Australia
-// 
+//
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
-// 
+//
 // 1. Redistributions of source code must retain the above copyright
 // notice, this list of conditions and the following disclaimer.
-// 
+//
 // 2. Redistributions in binary form must reproduce the above copyright
 // notice, this list of conditions and the following disclaimer in the
 // documentation and/or other materials provided with the distribution.
-// 
+//
 // THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
 // IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
 // TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
@@ -72,13 +72,25 @@ namespace ojph {
       (const param_atk* atk, const line_buf* dst, const line_buf* lsrc,
         const line_buf* hsrc, ui32 width, bool even);
 
+    void r1x1_rev_horz_ana(const param_atk* atk,
+                          const line_buf* ldst, const line_buf* hdst,
+                          const line_buf* src, ui32 width, bool even);
+
+    void r1x1_rev_horz_syn(const param_atk* atk,
+                           const line_buf* dst,
+                           const line_buf* lsrc, const line_buf* hsrc,
+                           ui32 width, bool even);
+
+    void r1x1_rev_vert_ana(line_buf* even, line_buf* odd, ui32 width);
+    void r1x1_rev_vert_syn(line_buf* L, line_buf* H, ui32 width);
+
     /////////////////////////////////////////////////////////////////////////
     // Irreversible functions
     /////////////////////////////////////////////////////////////////////////
 
     /////////////////////////////////////////////////////////////////////////
     extern void (*irv_vert_step)
-      (const lifting_step* s, const line_buf* sig, const line_buf* other, 
+      (const lifting_step* s, const line_buf* sig, const line_buf* other,
         const line_buf* aug, ui32 repeat, bool synthesis);
 
     /////////////////////////////////////////////////////////////////////////
@@ -87,12 +99,12 @@ namespace ojph {
 
     /////////////////////////////////////////////////////////////////////////
     extern void (*irv_horz_ana)
-      (const param_atk* atk, const line_buf* ldst, const line_buf* hdst, 
+      (const param_atk* atk, const line_buf* ldst, const line_buf* hdst,
         const line_buf* src, ui32 width, bool even);
 
     /////////////////////////////////////////////////////////////////////////
     extern void (*irv_horz_syn)
-      (const param_atk* atk, const line_buf* dst, const line_buf* lsrc, 
+      (const param_atk* atk, const line_buf* dst, const line_buf* lsrc,
         const line_buf* hsrc, ui32 width, bool even);
 
   }
