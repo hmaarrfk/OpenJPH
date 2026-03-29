@@ -683,7 +683,9 @@ namespace ojph {
                (hsrc == NULL || hsrc->flags & line_buf::LFT_64BIT));
         gen_rev_horz_syn64(atk, dst, lsrc, hsrc, width, even);
       }
-    }    
+    }
+
+#endif
 
     static void r1x1_rev_horz_ana32(const param_atk*,
                                     const line_buf* ldst,
@@ -887,6 +889,8 @@ namespace ojph {
         r1x1_rev_vert_syn64(L, H, width);
     }
 
+#if !defined(OJPH_ENABLE_WASM_SIMD) || !defined(OJPH_EMSCRIPTEN)
+
     //////////////////////////////////////////////////////////////////////////
     void gen_irv_vert_step(const lifting_step* s, const line_buf* sig, 
                            const line_buf* other, const line_buf* aug, 
@@ -1049,7 +1053,7 @@ namespace ojph {
       }
     }
 
-#endif // !OJPH_ENABLE_WASM_SIMD
+#endif
 
   }
 }
