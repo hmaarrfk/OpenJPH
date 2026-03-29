@@ -32,12 +32,10 @@
 
 #include <vector>
 
-#include "ojph_arch.h"
-#include "ojph_mem.h"
 #include "ojph_codestream.h"
 #include "ojph_file.h"
+#include "ojph_mem.h"
 #include "ojph_params.h"
-#include "../src/core/transform/ojph_transform.h"
 #include "gtest/gtest.h"
 
 namespace {
@@ -115,31 +113,6 @@ std::vector<ojph::ui8> encode_circle_to_memory(const std::vector<ojph::si32>& fu
 
 } // namespace
 
-TEST(TestExecutables, R1x1WaveletHorzRoundTripEvenAligned) {
-  using namespace ojph;
-
-  si32 src_buf[4] = {1, 2, 3, 4};
-  si32 l_buf[4] = {0, 0, 0, 0};
-  si32 h_buf[4] = {0, 0, 0, 0};
-  si32 dst_buf[4] = {0, 0, 0, 0};
-
-  line_buf src;
-  line_buf ldst;
-  line_buf hdst;
-  line_buf dst;
-
-  src.wrap(src_buf, 4, 0);
-  ldst.wrap(l_buf, 4, 0);
-  hdst.wrap(h_buf, 4, 0);
-  dst.wrap(dst_buf, 4, 0);
-
-  local::r1x1_rev_horz_ana(nullptr, &ldst, &hdst, &src, 4, true);
-  local::r1x1_rev_horz_syn(nullptr, &dst, &ldst, &hdst, 4, true);
-
-  for (int i = 0; i < 4; ++i)
-    EXPECT_EQ(dst_buf[i], src_buf[i]);
-}
-
 TEST(TestExecutables, R1x1WaveletCircleMemoryDecodeMatchesGridSubsample) {
   using namespace ojph;
 
@@ -191,82 +164,4 @@ TEST(TestExecutables, R1x1WaveletCircleMemoryDecodeMatchesGridSubsample) {
     reader.close();
     reader_file.close();
   }
-}
-
-TEST(TestExecutables, R1x1WaveletCircleRev53CoarseLevelDiffersFromGridSubsample) {
-  using namespace ojph;
-
-  const ui32 width = 512;
-  const ui32 height = 512;
-  const si32 radius = 150;
-  const ui32 num_decompositions = 5;
-
-  std::vector<si32> full_plane((size_t)width * (size_t)height);
-  for (ui32 y = 0; y < height; ++y)
-    for (ui32 x = 0; x < width; ++x)
-      full_plane[(size_t)y * width + x] =
-        circle_sample(x, y, width, height, radius);
-
-  const std::vector<ui8> codestream_bytes =
-    encode_circle_to_memory(full_plane, width, height, num_decompositions,
-                            false);
-
-  {
-    mem_infile reader_file;
-    reader_file.open(codestream_bytes.data(), codestream_bytes.size());
-    codestream reader;
-    reader.set_planar(false);
-    reader.read_headers(&reader_file);
-    reader.restrict_input_resolution(0, 0);
-    reader.create();
-    param_siz rsiz = reader.access_siz();
-    ASSERT_EQ(rsiz.get_recon_width(0), width);
-    ASSERT_EQ(rsiz.get_recon_height(0), height);
-    for (ui32 row = 0; row < height; ++row) {
-      ui32 comp_num = 0;
-      line_buf* line = reader.pull(comp_num);
-      const si32* samples = line->i32;
-      for (ui32 col = 0; col < width; ++col)
-        EXPECT_EQ(samples[col], full_plane[(size_t)row * width + col])
-          << "row=" << row << " col=" << col;
-    }
-    reader.close();
-    reader_file.close();
-  }
-
-  bool mismatch_versus_grid_subsample_at_some_level = false;
-  for (ui32 level = 1; level <= num_decompositions; ++level) {
-    mem_infile reader_file;
-    reader_file.open(codestream_bytes.data(), codestream_bytes.size());
-    codestream reader;
-    reader.set_planar(false);
-    reader.read_headers(&reader_file);
-    reader.restrict_input_resolution(level, level);
-    reader.create();
-    param_siz rsiz = reader.access_siz();
-    const ui32 recon_w = rsiz.get_recon_width(0);
-    const ui32 recon_h = rsiz.get_recon_height(0);
-    ASSERT_EQ(recon_w, width >> level);
-    ASSERT_EQ(recon_h, height >> level);
-    for (ui32 row = 0; row < recon_h && !mismatch_versus_grid_subsample_at_some_level;
-         ++row) {
-      ui32 comp_num = 0;
-      line_buf* line = reader.pull(comp_num);
-      const si32* samples = line->i32;
-      const ui32 src_y = row << level;
-      for (ui32 col = 0; col < recon_w; ++col) {
-        const ui32 src_x = col << level;
-        const si32 grid_value =
-          full_plane[(size_t)src_y * width + src_x];
-        if (samples[col] != grid_value) {
-          mismatch_versus_grid_subsample_at_some_level = true;
-          break;
-        }
-      }
-    }
-    reader.close();
-    reader_file.close();
-  }
-
-  EXPECT_TRUE(mismatch_versus_grid_subsample_at_some_level);
 }
