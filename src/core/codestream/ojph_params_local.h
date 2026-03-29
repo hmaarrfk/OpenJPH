@@ -544,8 +544,7 @@ namespace ojph {
       ui8 get_wavelet_kern() const
       { return SPcod.wavelet_trans; }
 
-      bool is_using_wavelet_oneXone() const
-      { return SPcod.wavelet_trans == DWT_R1X1; }
+      bool is_using_wavelet_oneXone() const;
 
       ////////////////////////////////////////
       bool is_reversible() const;

@@ -853,10 +853,16 @@ namespace ojph {
     {
       if (SPcod.wavelet_trans <= 1)
         return get_wavelet_kern() == local::param_cod::DWT_REV53;
-      if (SPcod.wavelet_trans == local::param_cod::DWT_R1X1)
-        return true;
-      assert(atk != NULL);
-      return atk->is_reversible();
+      if (atk != NULL)
+        return atk->is_reversible();
+      return SPcod.wavelet_trans == local::param_cod::DWT_R1X1;
+    }
+
+    bool param_cod::is_using_wavelet_oneXone() const
+    {
+      if (atk != NULL)
+        return atk->get_num_steps() == 0 && atk->is_reversible();
+      return SPcod.wavelet_trans == local::param_cod::DWT_R1X1;
     }
 
     //////////////////////////////////////////////////////////////////////////
@@ -1200,18 +1206,16 @@ namespace ojph {
         qcd_is_signed = siz.is_signed(qcd_component);
         qcd_wavelet_kern = cod.get_wavelet_kern();
         this->num_subbands = 1 + 3 * qcd_num_decompositions;
-        if (qcd_wavelet_kern == param_cod::DWT_REV53
-            || qcd_wavelet_kern == param_cod::DWT_R1X1)
+        const param_cod *qcd_cod = cod.get_coc(qcd_component);
+        if (qcd_cod->is_reversible())
           set_rev_quant(qcd_num_decompositions, qcd_bit_depth,
             qcd_component < 3 ? employing_color_transform : false);
-        else if (qcd_wavelet_kern == param_cod::DWT_IRV97)
+        else
         {
           if (this->base_delta == -1.0f)
             this->base_delta = 1.0f / (float)(1 << qcd_bit_depth);
           set_irrev_quant(qcd_num_decompositions);
         }
-        else
-          assert(0);
       }
 
       // if not all the same and captured by QCD, then create QCC for them
@@ -1235,18 +1239,15 @@ namespace ojph {
           ui32 num_decompositions = cp->get_num_decompositions();
           qp->num_subbands = 1 + 3 * num_decompositions;
           ui32 bit_depth = siz.get_bit_depth(c);
-          if (cp->get_wavelet_kern() == param_cod::DWT_REV53
-              || cp->get_wavelet_kern() == param_cod::DWT_R1X1)
+          if (cp->is_reversible())
             qp->set_rev_quant(num_decompositions, bit_depth,
               c < 3 ? employing_color_transform : false);
-          else if (cp->get_wavelet_kern() == param_cod::DWT_IRV97)
+          else
           {
             if (qp->base_delta == -1.0f)
               qp->base_delta = 1.0f / (float)(1 << bit_depth);
             qp->set_irrev_quant(num_decompositions);
           }
-          else
-            assert(0);
         }
       }
       else if (other_comps_exist) // Some are captured by QCD
@@ -1261,18 +1262,15 @@ namespace ojph {
           ui32 num_decompositions = cp->get_num_decompositions();
           qp->num_subbands = 1 + 3 * num_decompositions;
           ui32 bit_depth = siz.get_bit_depth(c);
-          if (cp->get_wavelet_kern() == param_cod::DWT_REV53
-              || cp->get_wavelet_kern() == param_cod::DWT_R1X1)
+          if (cp->is_reversible())
             qp->set_rev_quant(num_decompositions, bit_depth,
               c < 3 ? employing_color_transform : false);
-          else if (cp->get_wavelet_kern() == param_cod::DWT_IRV97)
+          else
           {
             if (qp->base_delta == -1.0f)
               qp->base_delta = 1.0f / (float)(1 << bit_depth);
             qp->set_irrev_quant(num_decompositions);
           }
-          else
-            assert(0);
         }
       }
     }
@@ -2380,7 +2378,6 @@ namespace ojph {
         // error.
         if (index == 0) { this->init_irv97(); return this; }
         else if (index == 1) { this->init_rev53(); return this; }
-        else if (index == 2) { this->init_r1x1(); return this; }
       }
 
       param_atk* p = this;
