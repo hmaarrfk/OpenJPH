@@ -51,8 +51,58 @@
 #include "ojph_block_encoder.h"
 #include "ojph_message.h"
 
+#ifdef OJPH_COMPILER_MSVC
+#include <malloc.h>
+#define OJPH_MS_STACK_ALLOC(sz) ((ui8*)_alloca(sz))
+#else
+#include <alloca.h>
+#define OJPH_MS_STACK_ALLOC(sz) ((ui8*)alloca(sz))
+#endif
+
 namespace ojph {
   namespace local {
+
+    static ui32 ht_ms32_scratch_bytes(ui32 width, ui32 height)
+    {
+      ui64 n = (ui64)width * height;
+      assert(n > 0 && n <= 4096u);
+      return (ui32)((n * 64ull + 14ull) / 15ull);
+    }
+
+    static ui32 ht_ms64_scratch_bytes(ui32 width, ui32 height)
+    {
+      ui64 n = (ui64)width * height;
+      assert(n > 0 && n <= 4096u);
+      return (ui32)((n * 24030ull + 4095ull) / 4096ull);
+    }
+
+    static const ui32 k_ht_mel_scratch_bytes = 192u;
+
+    static ui32 ht_vlc_payload_scratch_bytes(ui32 width, ui32 height)
+    {
+      ui64 qcols = ((ui64)width + 1u) / 2u;
+      ui64 qrows = ((ui64)height + 1u) / 2u;
+      ui64 num_quads = qcols * qrows;
+      assert(num_quads > 0 && num_quads <= 1280u);
+      ui64 raw_bits = num_quads * 19ull;
+      ui64 raw_bytes = (raw_bits + 7ull) / 8ull;
+      return (ui32)((raw_bytes * 16ull + 14ull) / 15ull) + 64u;
+    }
+
+    static ui32 ht_mel_vlc_scratch_bytes(ui32 width, ui32 height)
+    {
+      return k_ht_mel_scratch_bytes + ht_vlc_payload_scratch_bytes(width, height);
+    }
+
+    static ui32 ht_ctx_row_slots(ui32 width)
+    {
+      ui32 n = (width + 1u) / 2u + 16u;
+      if (n < 32u)
+        n = 32u;
+      if (n > 513u)
+        n = 513u;
+      return n;
+    }
 
     /////////////////////////////////////////////////////////////////////////
     // tables
@@ -64,6 +114,121 @@ namespace ojph {
     // table 0 is for the initial line of quads
     static ui16 vlc_tbl0[2048] = { 0 };
     static ui16 vlc_tbl1[2048] = { 0 };
+    static ui16 vlc_tbl0_alt[2048] = { 0 };
+    static ui16 vlc_tbl1_alt[2048] = { 0 };
+
+    struct vlc_src_row { int c_q, rho, u_off, e_k, e_1, cwd, cwd_len; };
+
+    static void fill_vlc_alt_ui16(ui16 *primary, ui16 *alt,
+                                const vlc_src_row *src_tbl, size_t tbl_size)
+    {
+      si32 pattern_popcnt[16];
+      for (ui32 i = 0; i < 16; ++i)
+        pattern_popcnt[i] = (si32)population_count(i);
+      for (int i = 0; i < 2048; ++i)
+      {
+        if (primary[i] == 0)
+        {
+          alt[i] = 0;
+          continue;
+        }
+        int c_q = i >> 8, rho = (i >> 4) & 0xF, emb = i & 0xF;
+        ui16 p = primary[i];
+        int p_cwd = (int)p >> 8;
+        int p_len = ((int)p >> 4) & 7;
+        int p_ek = (int)p & 15;
+        const vlc_src_row *best2 = NULL;
+        int br = -1, be = -1, bc = INT_MAX;
+        if (emb)
+        {
+          for (size_t j = 0; j < tbl_size; ++j)
+          {
+            if (src_tbl[j].c_q != c_q || src_tbl[j].rho != rho)
+              continue;
+            if (src_tbl[j].u_off != 1)
+              continue;
+            if ((emb & src_tbl[j].e_k) != src_tbl[j].e_1)
+              continue;
+            if (src_tbl[j].cwd_len != p_len)
+              continue;
+            if (src_tbl[j].cwd == p_cwd && src_tbl[j].e_k == p_ek)
+              continue;
+            int cr = pattern_popcnt[src_tbl[j].e_k & rho];
+            int ce = pattern_popcnt[src_tbl[j].e_k];
+            int cc = src_tbl[j].cwd;
+            bool rep = best2 == NULL;
+            if (!rep && cr > br)
+              rep = true;
+            else if (!rep && cr == br && ce > be)
+              rep = true;
+            else if (!rep && cr == br && ce == be && cc < bc)
+              rep = true;
+            if (rep)
+            {
+              best2 = src_tbl + j;
+              br = cr;
+              be = ce;
+              bc = cc;
+            }
+          }
+        }
+        else
+        {
+          for (size_t j = 0; j < tbl_size; ++j)
+          {
+            if (src_tbl[j].c_q != c_q || src_tbl[j].rho != rho)
+              continue;
+            if (src_tbl[j].u_off != 0)
+              continue;
+            if (src_tbl[j].cwd_len != p_len)
+              continue;
+            if (src_tbl[j].cwd == p_cwd && src_tbl[j].e_k == p_ek)
+              continue;
+            int cr = pattern_popcnt[src_tbl[j].e_k & rho];
+            int ce = pattern_popcnt[src_tbl[j].e_k];
+            int cc = src_tbl[j].cwd;
+            bool rep = best2 == NULL;
+            if (!rep && cr > br)
+              rep = true;
+            else if (!rep && cr == br && ce > be)
+              rep = true;
+            else if (!rep && cr == br && ce == be && cc < bc)
+              rep = true;
+            if (rep)
+            {
+              best2 = src_tbl + j;
+              br = cr;
+              be = ce;
+              bc = cc;
+            }
+          }
+        }
+        if (best2)
+          alt[i] = (ui16)((best2->cwd << 8) + (best2->cwd_len << 4) + best2->e_k);
+        else
+          alt[i] = p;
+      }
+    }
+
+    static inline int ht_ms_msum_Uq(int e_k, int Uq, int rho)
+    {
+      int s = 0;
+      for (int b = 0; b < 4; ++b)
+      {
+        if (rho & (1 << b))
+          s += Uq - ((e_k >> b) & 1);
+      }
+      return s;
+    }
+
+    static inline ui16 ht_pick_vlc_tuple_u16(ui16 pri, ui16 alt, int Uq, int rho)
+    {
+      int len_pri = (pri >> 4) & 7;
+      int len_alt = (alt >> 4) & 7;
+      int sp = len_pri + ht_ms_msum_Uq(pri & 15, Uq, rho);
+      int sa = len_alt + ht_ms_msum_Uq(alt & 15, Uq, rho);
+      return sa < sp ? alt : pri;
+    }
 
     //UVLC encoding
     const int num_uvlc_entries = 75;
@@ -75,17 +240,16 @@ namespace ojph {
     /////////////////////////////////////////////////////////////////////////
     static bool vlc_init_tables()
     {
-      struct vlc_src_table { int c_q, rho, u_off, e_k, e_1, cwd, cwd_len; };
-      vlc_src_table tbl0[] = {
+      vlc_src_row tbl0[] = {
     #include "table0.h"
       };
-      size_t tbl0_size = sizeof(tbl0) / sizeof(vlc_src_table);
+      size_t tbl0_size = sizeof(tbl0) / sizeof(vlc_src_row);
 
       si32 pattern_popcnt[16];
       for (ui32 i = 0; i < 16; ++i)
         pattern_popcnt[i] = (si32)population_count(i);
 
-      vlc_src_table* src_tbl = tbl0;
+      vlc_src_row* src_tbl = tbl0;
       ui16 *tgt_tbl = vlc_tbl0;
       size_t tbl_size = tbl0_size;
       for (int i = 0; i < 2048; ++i)
@@ -95,36 +259,89 @@ namespace ojph {
           tgt_tbl[i] = 0;
         else
         {
-          vlc_src_table *best_entry = NULL;
-          if (emb) // u_off = 1
+          vlc_src_row *best_entry = NULL;
+          if (emb)
           {
-            int best_e_k = -1;
+            int best_cwd_len = INT_MAX;
+            int best_rho_pop = -1;
+            int best_e_k_pop = -1;
+            int best_cwd = INT_MAX;
             for (size_t j = 0; j < tbl_size; ++j)
             {
               if (src_tbl[j].c_q == c_q && src_tbl[j].rho == rho)
                 if (src_tbl[j].u_off == 1)
                   if ((emb & src_tbl[j].e_k) == src_tbl[j].e_1)
                   {
-                    //now we need to find the smallest cwd with the highest
-                    // number of bits set in e_k
-                    int ones_count = pattern_popcnt[src_tbl[j].e_k];
-                    if (ones_count >= best_e_k)
+                    int cand_len = src_tbl[j].cwd_len;
+                    int cand_rho_pop =
+                      pattern_popcnt[src_tbl[j].e_k & rho];
+                    int cand_e_pop = pattern_popcnt[src_tbl[j].e_k];
+                    int cand_cwd = src_tbl[j].cwd;
+                    bool replace = best_entry == NULL;
+                    if (!replace && cand_len < best_cwd_len)
+                      replace = true;
+                    else if (!replace && cand_len == best_cwd_len)
+                    {
+                      if (cand_rho_pop > best_rho_pop)
+                        replace = true;
+                      else if (cand_rho_pop == best_rho_pop)
+                      {
+                        if (cand_e_pop > best_e_k_pop)
+                          replace = true;
+                        else if (cand_e_pop == best_e_k_pop && cand_cwd < best_cwd)
+                          replace = true;
+                      }
+                    }
+                    if (replace)
                     {
                       best_entry = src_tbl + j;
-                      best_e_k = ones_count;
+                      best_cwd_len = cand_len;
+                      best_rho_pop = cand_rho_pop;
+                      best_e_k_pop = cand_e_pop;
+                      best_cwd = cand_cwd;
                     }
                   }
             }
           }
-          else // u_off = 0
+          else
           {
+            int best_cwd_len = INT_MAX;
+            int best_rho_pop = -1;
+            int best_e_k_pop = -1;
+            int best_cwd = INT_MAX;
             for (size_t j = 0; j < tbl_size; ++j)
             {
               if (src_tbl[j].c_q == c_q && src_tbl[j].rho == rho)
                 if (src_tbl[j].u_off == 0)
                 {
-                  best_entry = src_tbl + j;
-                  break;
+                  int cand_len = src_tbl[j].cwd_len;
+                  int cand_rho_pop =
+                    pattern_popcnt[src_tbl[j].e_k & rho];
+                  int cand_e_pop = pattern_popcnt[src_tbl[j].e_k];
+                  int cand_cwd = src_tbl[j].cwd;
+                  bool replace = best_entry == NULL;
+                  if (!replace && cand_len < best_cwd_len)
+                    replace = true;
+                  else if (!replace && cand_len == best_cwd_len)
+                  {
+                    if (cand_rho_pop > best_rho_pop)
+                      replace = true;
+                    else if (cand_rho_pop == best_rho_pop)
+                    {
+                      if (cand_e_pop > best_e_k_pop)
+                        replace = true;
+                      else if (cand_e_pop == best_e_k_pop && cand_cwd < best_cwd)
+                        replace = true;
+                    }
+                  }
+                  if (replace)
+                  {
+                    best_entry = src_tbl + j;
+                    best_cwd_len = cand_len;
+                    best_rho_pop = cand_rho_pop;
+                    best_e_k_pop = cand_e_pop;
+                    best_cwd = cand_cwd;
+                  }
                 }
             }
           }
@@ -134,10 +351,12 @@ namespace ojph {
         }
       }
 
-      vlc_src_table tbl1[] = {
+      fill_vlc_alt_ui16(vlc_tbl0, vlc_tbl0_alt, tbl0, tbl0_size);
+
+      vlc_src_row tbl1[] = {
     #include "table1.h"
       };
-      size_t tbl1_size = sizeof(tbl1) / sizeof(vlc_src_table);
+      size_t tbl1_size = sizeof(tbl1) / sizeof(vlc_src_row);
 
       src_tbl = tbl1;
       tgt_tbl = vlc_tbl1;
@@ -149,36 +368,89 @@ namespace ojph {
           tgt_tbl[i] = 0;
         else
         {
-          vlc_src_table *best_entry = NULL;
-          if (emb) // u_off = 1
+          vlc_src_row *best_entry = NULL;
+          if (emb)
           {
-            int best_e_k = -1;
+            int best_cwd_len = INT_MAX;
+            int best_rho_pop = -1;
+            int best_e_k_pop = -1;
+            int best_cwd = INT_MAX;
             for (size_t j = 0; j < tbl_size; ++j)
             {
               if (src_tbl[j].c_q == c_q && src_tbl[j].rho == rho)
                 if (src_tbl[j].u_off == 1)
                   if ((emb & src_tbl[j].e_k) == src_tbl[j].e_1)
                   {
-                    //now we need to find the smallest cwd with the highest
-                    // number of bits set in e_k
-                    int ones_count = pattern_popcnt[src_tbl[j].e_k];
-                    if (ones_count >= best_e_k)
+                    int cand_len = src_tbl[j].cwd_len;
+                    int cand_rho_pop =
+                      pattern_popcnt[src_tbl[j].e_k & rho];
+                    int cand_e_pop = pattern_popcnt[src_tbl[j].e_k];
+                    int cand_cwd = src_tbl[j].cwd;
+                    bool replace = best_entry == NULL;
+                    if (!replace && cand_len < best_cwd_len)
+                      replace = true;
+                    else if (!replace && cand_len == best_cwd_len)
+                    {
+                      if (cand_rho_pop > best_rho_pop)
+                        replace = true;
+                      else if (cand_rho_pop == best_rho_pop)
+                      {
+                        if (cand_e_pop > best_e_k_pop)
+                          replace = true;
+                        else if (cand_e_pop == best_e_k_pop && cand_cwd < best_cwd)
+                          replace = true;
+                      }
+                    }
+                    if (replace)
                     {
                       best_entry = src_tbl + j;
-                      best_e_k = ones_count;
+                      best_cwd_len = cand_len;
+                      best_rho_pop = cand_rho_pop;
+                      best_e_k_pop = cand_e_pop;
+                      best_cwd = cand_cwd;
                     }
                   }
             }
           }
-          else // u_off = 0
+          else
           {
+            int best_cwd_len = INT_MAX;
+            int best_rho_pop = -1;
+            int best_e_k_pop = -1;
+            int best_cwd = INT_MAX;
             for (size_t j = 0; j < tbl_size; ++j)
             {
               if (src_tbl[j].c_q == c_q && src_tbl[j].rho == rho)
                 if (src_tbl[j].u_off == 0)
                 {
-                  best_entry = src_tbl + j;
-                  break;
+                  int cand_len = src_tbl[j].cwd_len;
+                  int cand_rho_pop =
+                    pattern_popcnt[src_tbl[j].e_k & rho];
+                  int cand_e_pop = pattern_popcnt[src_tbl[j].e_k];
+                  int cand_cwd = src_tbl[j].cwd;
+                  bool replace = best_entry == NULL;
+                  if (!replace && cand_len < best_cwd_len)
+                    replace = true;
+                  else if (!replace && cand_len == best_cwd_len)
+                  {
+                    if (cand_rho_pop > best_rho_pop)
+                      replace = true;
+                    else if (cand_rho_pop == best_rho_pop)
+                    {
+                      if (cand_e_pop > best_e_k_pop)
+                        replace = true;
+                      else if (cand_e_pop == best_e_k_pop && cand_cwd < best_cwd)
+                        replace = true;
+                    }
+                  }
+                  if (replace)
+                  {
+                    best_entry = src_tbl + j;
+                    best_cwd_len = cand_len;
+                    best_rho_pop = cand_rho_pop;
+                    best_e_k_pop = cand_e_pop;
+                    best_cwd = cand_cwd;
+                  }
                 }
             }
           }
@@ -188,6 +460,7 @@ namespace ojph {
         }
       }
 
+      fill_vlc_alt_ui16(vlc_tbl1, vlc_tbl1_alt, tbl1, tbl1_size);
 
       return true;
     }
@@ -261,6 +534,8 @@ namespace ojph {
       std::call_once(tables_initialized_flag, []() {
         memset(vlc_tbl0, 0, 2048 * sizeof(ui16));
         memset(vlc_tbl1, 0, 2048 * sizeof(ui16));
+        memset(vlc_tbl0_alt, 0, 2048 * sizeof(ui16));
+        memset(vlc_tbl1_alt, 0, 2048 * sizeof(ui16));
         tables_initialized = vlc_init_tables();
         tables_initialized = tables_initialized && uvlc_init_tables();
       });
@@ -547,14 +822,20 @@ namespace ojph {
     {
       assert(num_passes == 1);
       (void)num_passes;                      //currently not used
-      const int ms_size = (16384*16+14)/15;  //more than enough
-      ui8 ms_buf[ms_size];
-      const int mel_vlc_size = 3072;         //more than enough
-      ui8 mel_vlc_buf[mel_vlc_size];
-      const int mel_size = 192;
-      ui8 *mel_buf = mel_vlc_buf;
-      const int vlc_size = mel_vlc_size - mel_size;
-      ui8 *vlc_buf = mel_vlc_buf + mel_size;
+      const ui32 ctx_row_slots = ht_ctx_row_slots(width);
+      const ui32 ms_size = ht_ms32_scratch_bytes(width, height);
+      const ui32 mel_vlc_size = ht_mel_vlc_scratch_bytes(width, height);
+      const ui32 mel_size = k_ht_mel_scratch_bytes;
+      const ui32 vlc_size = mel_vlc_size - mel_size;
+      const ui32 ht_slab_bytes = ms_size + mel_vlc_size + ctx_row_slots * 2u;
+      ui8* const ht_slab = OJPH_MS_STACK_ALLOC(ht_slab_bytes);
+      ui8* const ms_buf = ht_slab;
+      ui8* const mel_vlc_buf = ht_slab + ms_size;
+      ui8* const mel_buf = mel_vlc_buf;
+      ui8* const vlc_buf = mel_vlc_buf + mel_size;
+      ui8* const e_val = mel_vlc_buf + mel_vlc_size;
+      ui8* const cx_val = e_val + ctx_row_slots;
+      memset(e_val, 0, ctx_row_slots * 2u);
 
       mel_struct mel;
       mel_init(&mel, mel_size, mel_buf);
@@ -565,19 +846,8 @@ namespace ojph {
 
       ui32 p = 30 - missing_msbs;
 
-      //e_val: E values for a line (these are the highest set bit)
-      //cx_val: is the context values
-      //Each byte stores the info for the 2 sample. For E, it is maximum
-      // of the two samples, while for cx, it is the OR of these two samples.
-      //The maximum is between the pixel at the bottom left of one quad
-      // and the bottom right of the earlier quad. The same is true for cx.
-      //For a 1024 pixels, we need 512 bytes, the 2 extra,
-      // one for the non-existing earlier quad, and one for beyond the
-      // the end
-      ui8 e_val[513];
-      ui8 cx_val[513];
-      ui8* lep = e_val;     lep[0] = 0;
-      ui8* lcxp = cx_val;   lcxp[0] = 0;
+      ui8* lep = e_val;
+      ui8* lcxp = cx_val;
 
       //initial row of quads
       int e_qmax[2] = {0,0}, e_q[8] = {0,0,0,0,0,0,0,0};
@@ -658,7 +928,9 @@ namespace ojph {
         lcxp[0] = (ui8)(lcxp[0] | (ui8)((rho[0] & 2) >> 1)); lcxp++;
         lcxp[0] = (ui8)((rho[0] & 8) >> 3);
 
-        ui16 tuple0 = vlc_tbl0[(c_q0 << 8) + (rho[0] << 4) + eps0];
+        int ti0 = (c_q0 << 8) + (rho[0] << 4) + eps0;
+        ui16 tuple0 = ht_pick_vlc_tuple_u16(vlc_tbl0[ti0], vlc_tbl0_alt[ti0],
+                                            Uq0, rho[0]);
         vlc_encode(&vlc, tuple0 >> 8, (tuple0 >> 4) & 7);
 
         if (c_q0 == 0)
@@ -744,7 +1016,9 @@ namespace ojph {
           lep[0] = (ui8)e_q[7];
           lcxp[0] |= (ui8)(lcxp[0] | (ui8)((rho[1] & 2) >> 1)); lcxp++;
           lcxp[0] = (ui8)((rho[1] & 8) >> 3);
-          ui16 tuple1 = vlc_tbl0[(c_q1 << 8) + (rho[1] << 4) + eps1];
+          int ti1a = (c_q1 << 8) + (rho[1] << 4) + eps1;
+          ui16 tuple1 = ht_pick_vlc_tuple_u16(vlc_tbl0[ti1a], vlc_tbl0_alt[ti1a],
+                                              Uq1, rho[1]);
           vlc_encode(&vlc, tuple1 >> 8, (tuple1 >> 4) & 7);
 
           if (c_q1 == 0)
@@ -877,7 +1151,9 @@ namespace ojph {
           lcxp[0] = (ui8)(lcxp[0] | (ui8)((rho[0] & 2) >> 1)); lcxp++;
           int c_q1 = lcxp[0] + (lcxp[1] << 2);
           lcxp[0] = (ui8)((rho[0] & 8) >> 3);
-          ui16 tuple0 = vlc_tbl1[(c_q0 << 8) + (rho[0] << 4) + eps0];
+          int ti0b = (c_q0 << 8) + (rho[0] << 4) + eps0;
+          ui16 tuple0 = ht_pick_vlc_tuple_u16(vlc_tbl1[ti0b], vlc_tbl1_alt[ti0b],
+                                              Uq0, rho[0]);
           vlc_encode(&vlc, tuple0 >> 8, (tuple0 >> 4) & 7);
 
           if (c_q0 == 0)
@@ -966,7 +1242,9 @@ namespace ojph {
             lcxp[0] = (ui8)(lcxp[0] | (ui8)((rho[1] & 2) >> 1)); lcxp++;
             c_q0 = lcxp[0] + (lcxp[1] << 2);
             lcxp[0] = (ui8)((rho[1] & 8) >> 3);
-            ui16 tuple1 = vlc_tbl1[(c_q1 << 8) + (rho[1] << 4) + eps1];
+            int ti1b = (c_q1 << 8) + (rho[1] << 4) + eps1;
+            ui16 tuple1 = ht_pick_vlc_tuple_u16(vlc_tbl1[ti1b], vlc_tbl1_alt[ti1b],
+                                                Uq1, rho[1]);
             vlc_encode(&vlc, tuple1 >> 8, (tuple1 >> 4) & 7);
 
             if (c_q1 == 0)
@@ -1001,6 +1279,7 @@ namespace ojph {
 
       //copy to elastic
       lengths[0] = mel.pos + vlc.pos + ms.pos;
+      lengths[1] = 0;
       elastic->get_buffer(mel.pos + vlc.pos + ms.pos, coded);
       memcpy(coded->buf, ms.buf, ms.pos);
       memcpy(coded->buf + ms.pos, mel.buf, mel.pos);
@@ -1031,27 +1310,20 @@ namespace ojph {
     {
       assert(num_passes == 1);
       (void)num_passes;                      //currently not used
-      // 38 bits/sample + 1 color + 4 wavelet = 43 bits per sample.
-      // * 4096 samples / 8 bits per byte = 22016; then rounded up to the 
-      // nearest 1 kB, givin 22528.  This expanded further to take into 
-      // consideration stuffing at a max rate of 16 bits per 15 bits 
-      // (1 bit for every 15 bits of data); in reality, it is much smaller
-      // than this.
-      const int ms_size = (22528 * 16 + 14) / 15;  //more than enough
-      ui8 ms_buf[ms_size];
-      // For each quad, we need at most, 7 bits for VLC and 12 bits for UVLC.
-      // So we have 1024 quads * 19 / 8, which is 2432.  This must be 
-      // multiplied by 16 / 15 to accommodate stuffing.  
-      // The mel is at most around 1 bit/quad, giving around 128 byte -- in
-      // practice there was on case where it got to 132 bytes.  Even 
-      // accounting for stuffing, it is smaller than 192.  Therefore,
-      // 3072 is more than enough
-      const int mel_vlc_size = 3072;         //more than enough
-      ui8 mel_vlc_buf[mel_vlc_size];
-      const int mel_size = 192;
-      ui8 *mel_buf = mel_vlc_buf;
-      const int vlc_size = mel_vlc_size - mel_size;
-      ui8 *vlc_buf = mel_vlc_buf + mel_size;
+      const ui32 ctx_row_slots = ht_ctx_row_slots(width);
+      const ui32 ms_size = ht_ms64_scratch_bytes(width, height);
+      const ui32 mel_vlc_size = ht_mel_vlc_scratch_bytes(width, height);
+      const ui32 mel_size = k_ht_mel_scratch_bytes;
+      const ui32 vlc_size = mel_vlc_size - mel_size;
+      const ui32 ht_slab_bytes = ms_size + mel_vlc_size + ctx_row_slots * 2u;
+      ui8* const ht_slab = OJPH_MS_STACK_ALLOC(ht_slab_bytes);
+      ui8* const ms_buf = ht_slab;
+      ui8* const mel_vlc_buf = ht_slab + ms_size;
+      ui8* const mel_buf = mel_vlc_buf;
+      ui8* const vlc_buf = mel_vlc_buf + mel_size;
+      ui8* const e_val = mel_vlc_buf + mel_vlc_size;
+      ui8* const cx_val = e_val + ctx_row_slots;
+      memset(e_val, 0, ctx_row_slots * 2u);
 
       mel_struct mel;
       mel_init(&mel, mel_size, mel_buf);
@@ -1062,19 +1334,8 @@ namespace ojph {
 
       ui32 p = 62 - missing_msbs;
 
-      //e_val: E values for a line (these are the highest set bit)
-      //cx_val: is the context values
-      //Each byte stores the info for the 2 sample. For E, it is maximum
-      // of the two samples, while for cx, it is the OR of these two samples.
-      //The maximum is between the pixel at the bottom left of one quad
-      // and the bottom right of the earlier quad. The same is true for cx.
-      //For a 1024 pixels, we need 512 bytes, the 2 extra,
-      // one for the non-existing earlier quad, and one for beyond the
-      // the end
-      ui8 e_val[513];
-      ui8 cx_val[513];
-      ui8* lep = e_val;     lep[0] = 0;
-      ui8* lcxp = cx_val;   lcxp[0] = 0;
+      ui8* lep = e_val;
+      ui8* lcxp = cx_val;
 
       //initial row of quads
       int e_qmax[2] = {0,0}, e_q[8] = {0,0,0,0,0,0,0,0};
@@ -1155,7 +1416,9 @@ namespace ojph {
         lcxp[0] = (ui8)(lcxp[0] | (ui8)((rho[0] & 2) >> 1)); lcxp++;
         lcxp[0] = (ui8)((rho[0] & 8) >> 3);
 
-        ui16 tuple0 = vlc_tbl0[(c_q0 << 8) + (rho[0] << 4) + eps0];
+        int ti0c = (c_q0 << 8) + (rho[0] << 4) + eps0;
+        ui16 tuple0 = ht_pick_vlc_tuple_u16(vlc_tbl0[ti0c], vlc_tbl0_alt[ti0c],
+                                            Uq0, rho[0]);
         vlc_encode(&vlc, tuple0 >> 8, (tuple0 >> 4) & 7);
 
         if (c_q0 == 0)
@@ -1241,7 +1504,9 @@ namespace ojph {
           lep[0] = (ui8)e_q[7];
           lcxp[0] |= (ui8)(lcxp[0] | (ui8)((rho[1] & 2) >> 1)); lcxp++;
           lcxp[0] = (ui8)((rho[1] & 8) >> 3);
-          ui16 tuple1 = vlc_tbl0[(c_q1 << 8) + (rho[1] << 4) + eps1];
+          int ti1c = (c_q1 << 8) + (rho[1] << 4) + eps1;
+          ui16 tuple1 = ht_pick_vlc_tuple_u16(vlc_tbl0[ti1c], vlc_tbl0_alt[ti1c],
+                                              Uq1, rho[1]);
           vlc_encode(&vlc, tuple1 >> 8, (tuple1 >> 4) & 7);
 
           if (c_q1 == 0)
@@ -1379,7 +1644,9 @@ namespace ojph {
           lcxp[0] = (ui8)(lcxp[0] | (ui8)((rho[0] & 2) >> 1)); lcxp++;
           int c_q1 = lcxp[0] + (lcxp[1] << 2);
           lcxp[0] = (ui8)((rho[0] & 8) >> 3);
-          ui16 tuple0 = vlc_tbl1[(c_q0 << 8) + (rho[0] << 4) + eps0];
+          int ti0d = (c_q0 << 8) + (rho[0] << 4) + eps0;
+          ui16 tuple0 = ht_pick_vlc_tuple_u16(vlc_tbl1[ti0d], vlc_tbl1_alt[ti0d],
+                                              Uq0, rho[0]);
           vlc_encode(&vlc, tuple0 >> 8, (tuple0 >> 4) & 7);
 
           if (c_q0 == 0)
@@ -1468,7 +1735,9 @@ namespace ojph {
             lcxp[0] = (ui8)(lcxp[0] | (ui8)((rho[1] & 2) >> 1)); lcxp++;
             c_q0 = lcxp[0] + (lcxp[1] << 2);
             lcxp[0] = (ui8)((rho[1] & 8) >> 3);
-            ui16 tuple1 = vlc_tbl1[(c_q1 << 8) + (rho[1] << 4) + eps1];
+            int ti1d = (c_q1 << 8) + (rho[1] << 4) + eps1;
+            ui16 tuple1 = ht_pick_vlc_tuple_u16(vlc_tbl1[ti1d], vlc_tbl1_alt[ti1d],
+                                                Uq1, rho[1]);
             vlc_encode(&vlc, tuple1 >> 8, (tuple1 >> 4) & 7);
 
             if (c_q1 == 0)
@@ -1505,6 +1774,7 @@ namespace ojph {
 
       //copy to elastic
       lengths[0] = mel.pos + vlc.pos + ms.pos;
+      lengths[1] = 0;
       elastic->get_buffer(mel.pos + vlc.pos + ms.pos, coded);
       memcpy(coded->buf, ms.buf, ms.pos);
       memcpy(coded->buf + ms.pos, mel.buf, mel.pos);

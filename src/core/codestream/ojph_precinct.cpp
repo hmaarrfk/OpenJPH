@@ -232,6 +232,15 @@ namespace ojph {
             //number of coding passes
             switch (cp->num_passes)
             {
+              case 6:
+                bb_put_bits(&bb, 15, 4, elastic, cur_coded_list, ph_bytes);
+                break;
+              case 5:
+                bb_put_bits(&bb, 14, 4, elastic, cur_coded_list, ph_bytes);
+                break;
+              case 4:
+                bb_put_bits(&bb, 13, 4, elastic, cur_coded_list, ph_bytes);
+                break;
               case 3:
                 bb_put_bits(&bb, 12, 4, elastic, cur_coded_list, ph_bytes);
                 break;
@@ -247,23 +256,29 @@ namespace ojph {
 
             //pass lengths
             //either one, two, or three passes, but only one or two lengths
+            ui32 raw_passes = cp->num_passes;
+            ui32 nraw = raw_passes ? (raw_passes - 1u) / 3u : 0u;
+            ui32 eff_passes = raw_passes - nraw * 3u;
             int bits1 = 32 - (int)count_leading_zeros(cp->pass_length[0]);
-            int extra_bit = cp->num_passes > 2 ? 1 : 0; //for 2nd length
+            int extra_bit = eff_passes > 2 ? 1 : 0;
             int bits2 = 0;
-            if (cp->num_passes > 1)
+            if (eff_passes > 1)
               bits2 = 32 - (int)count_leading_zeros(cp->pass_length[1]);
             int bits = ojph_max(bits1, bits2 - extra_bit) - 3;
+            bits += (int)(31u - count_leading_zeros(nraw * 3u + 1u));
             bits = ojph_max(bits, 0);
             bb_put_bits(&bb, 0xFFFFFFFEu, bits+1,
               elastic, cur_coded_list, ph_bytes);
 
             bb_put_bits(&bb, cp->pass_length[0], bits+3,
               elastic, cur_coded_list, ph_bytes);
-            if (cp->num_passes > 1)
+            if (eff_passes > 1)
               bb_put_bits(&bb, cp->pass_length[1], bits+3+extra_bit,
                 elastic, cur_coded_list, ph_bytes);
 
-            cb_bytes += cp->pass_length[0] + cp->pass_length[1];
+            cb_bytes += cp->pass_length[0];
+            if (eff_passes > 1)
+              cb_bytes += cp->pass_length[1];
           }
         }
       }

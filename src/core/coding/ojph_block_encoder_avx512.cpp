@@ -44,6 +44,14 @@
 #include <immintrin.h>
 #include <mutex>
 
+#ifdef OJPH_COMPILER_MSVC
+#include <malloc.h>
+#define OJPH_MS_STACK_ALLOC(sz) ((ui8*)_alloca(sz))
+#else
+#include <alloca.h>
+#define OJPH_MS_STACK_ALLOC(sz) ((ui8*)alloca(sz))
+#endif
+
 #include "ojph_mem.h"
 #include "ojph_block_encoder.h"
 #include "ojph_message.h"
@@ -59,6 +67,31 @@
 namespace ojph {
   namespace local {
 
+    static ui32 ht_ms32_scratch_bytes_padded(ui32 width, ui32 height)
+    {
+      ui64 n = (ui64)width * height;
+      assert(n > 0 && n <= 4096u);
+      return (ui32)((n * 64ull + 14ull) / 15ull);
+    }
+
+    static const ui32 k_ht_mel_scratch_bytes = 192u;
+
+    static ui32 ht_vlc_payload_scratch_bytes(ui32 width, ui32 height)
+    {
+      ui64 qcols = ((ui64)width + 1u) / 2u;
+      ui64 qrows = ((ui64)height + 1u) / 2u;
+      ui64 num_quads = qcols * qrows;
+      assert(num_quads > 0 && num_quads <= 1280u);
+      ui64 raw_bits = num_quads * 19ull;
+      ui64 raw_bytes = (raw_bits + 7ull) / 8ull;
+      return (ui32)((raw_bytes * 16ull + 14ull) / 15ull) + 64u;
+    }
+
+    static ui32 ht_mel_vlc_scratch_bytes_padded(ui32 width, ui32 height)
+    {
+      return k_ht_mel_scratch_bytes + ht_vlc_payload_scratch_bytes(width, height);
+    }
+
     /////////////////////////////////////////////////////////////////////////
     // tables
     /////////////////////////////////////////////////////////////////////////
@@ -69,6 +102,8 @@ namespace ojph {
     // table 0 is for the initial line of quads
     static ui32 vlc_tbl0[2048];
     static ui32 vlc_tbl1[2048];
+    static ui32 vlc_tbl0_alt[2048];
+    static ui32 vlc_tbl1_alt[2048];
 
     //UVLC encoding
     static ui32 ulvc_cwd_pre[33];
@@ -76,20 +111,112 @@ namespace ojph {
     static ui32 ulvc_cwd_suf[33];
     static int ulvc_cwd_suf_len[33];
 
+    struct vlc_src_row { int c_q, rho, u_off, e_k, e_1, cwd, cwd_len; };
+
+    static void fill_vlc_alt_u32(ui32 *primary, ui32 *alt,
+                                 const vlc_src_row *src_tbl, size_t tbl_size)
+    {
+      si32 pattern_popcnt[16];
+      for (ui32 i = 0; i < 16; ++i)
+        pattern_popcnt[i] = (si32)population_count(i);
+      for (int i = 0; i < 2048; ++i)
+      {
+        if (primary[i] == 0)
+        {
+          alt[i] = 0;
+          continue;
+        }
+        int c_q = i >> 8, rho = (i >> 4) & 0xF, emb = i & 0xF;
+        ui32 p = primary[i];
+        int p_cwd = (int)p >> 8;
+        int p_len = ((int)p >> 4) & 7;
+        int p_ek = (int)p & 15;
+        const vlc_src_row *best2 = NULL;
+        int br = -1, be = -1, bc = INT_MAX;
+        if (emb)
+        {
+          for (size_t j = 0; j < tbl_size; ++j)
+          {
+            if (src_tbl[j].c_q != c_q || src_tbl[j].rho != rho)
+              continue;
+            if (src_tbl[j].u_off != 1)
+              continue;
+            if ((emb & src_tbl[j].e_k) != src_tbl[j].e_1)
+              continue;
+            if (src_tbl[j].cwd_len != p_len)
+              continue;
+            if (src_tbl[j].cwd == p_cwd && src_tbl[j].e_k == p_ek)
+              continue;
+            int cr = pattern_popcnt[src_tbl[j].e_k & rho];
+            int ce = pattern_popcnt[src_tbl[j].e_k];
+            int cc = src_tbl[j].cwd;
+            bool rep = best2 == NULL;
+            if (!rep && cr > br)
+              rep = true;
+            else if (!rep && cr == br && ce > be)
+              rep = true;
+            else if (!rep && cr == br && ce == be && cc < bc)
+              rep = true;
+            if (rep)
+            {
+              best2 = src_tbl + j;
+              br = cr;
+              be = ce;
+              bc = cc;
+            }
+          }
+        }
+        else
+        {
+          for (size_t j = 0; j < tbl_size; ++j)
+          {
+            if (src_tbl[j].c_q != c_q || src_tbl[j].rho != rho)
+              continue;
+            if (src_tbl[j].u_off != 0)
+              continue;
+            if (src_tbl[j].cwd_len != p_len)
+              continue;
+            if (src_tbl[j].cwd == p_cwd && src_tbl[j].e_k == p_ek)
+              continue;
+            int cr = pattern_popcnt[src_tbl[j].e_k & rho];
+            int ce = pattern_popcnt[src_tbl[j].e_k];
+            int cc = src_tbl[j].cwd;
+            bool rep = best2 == NULL;
+            if (!rep && cr > br)
+              rep = true;
+            else if (!rep && cr == br && ce > be)
+              rep = true;
+            else if (!rep && cr == br && ce == be && cc < bc)
+              rep = true;
+            if (rep)
+            {
+              best2 = src_tbl + j;
+              br = cr;
+              be = ce;
+              bc = cc;
+            }
+          }
+        }
+        if (best2)
+          alt[i] = (ui32)((best2->cwd << 8) + (best2->cwd_len << 4) + best2->e_k);
+        else
+          alt[i] = p;
+      }
+    }
+
     /////////////////////////////////////////////////////////////////////////
     static bool vlc_init_tables()
     {
-      struct vlc_src_table { int c_q, rho, u_off, e_k, e_1, cwd, cwd_len; };
-      vlc_src_table tbl0[] = {
+      vlc_src_row tbl0[] = {
     #include "table0.h"
       };
-      size_t tbl0_size = sizeof(tbl0) / sizeof(vlc_src_table);
+      size_t tbl0_size = sizeof(tbl0) / sizeof(vlc_src_row);
 
       si32 pattern_popcnt[16];
       for (ui32 i = 0; i < 16; ++i)
         pattern_popcnt[i] = (si32)population_count(i);
 
-      vlc_src_table* src_tbl = tbl0;
+      vlc_src_row* src_tbl = tbl0;
       ui32 *tgt_tbl = vlc_tbl0;
       size_t tbl_size = tbl0_size;
       for (int i = 0; i < 2048; ++i)
@@ -99,36 +226,89 @@ namespace ojph {
           tgt_tbl[i] = 0;
         else
         {
-          vlc_src_table *best_entry = NULL;
-          if (emb) // u_off = 1
+          vlc_src_row *best_entry = NULL;
+          if (emb)
           {
-            int best_e_k = -1;
+            int best_cwd_len = INT_MAX;
+            int best_rho_pop = -1;
+            int best_e_k_pop = -1;
+            int best_cwd = INT_MAX;
             for (size_t j = 0; j < tbl_size; ++j)
             {
               if (src_tbl[j].c_q == c_q && src_tbl[j].rho == rho)
                 if (src_tbl[j].u_off == 1)
                   if ((emb & src_tbl[j].e_k) == src_tbl[j].e_1)
                   {
-                    //now we need to find the smallest cwd with the highest
-                    // number of bits set in e_k
-                    int ones_count = pattern_popcnt[src_tbl[j].e_k];
-                    if (ones_count >= best_e_k)
+                    int cand_len = src_tbl[j].cwd_len;
+                    int cand_rho_pop =
+                      pattern_popcnt[src_tbl[j].e_k & rho];
+                    int cand_e_pop = pattern_popcnt[src_tbl[j].e_k];
+                    int cand_cwd = src_tbl[j].cwd;
+                    bool replace = best_entry == NULL;
+                    if (!replace && cand_len < best_cwd_len)
+                      replace = true;
+                    else if (!replace && cand_len == best_cwd_len)
+                    {
+                      if (cand_rho_pop > best_rho_pop)
+                        replace = true;
+                      else if (cand_rho_pop == best_rho_pop)
+                      {
+                        if (cand_e_pop > best_e_k_pop)
+                          replace = true;
+                        else if (cand_e_pop == best_e_k_pop && cand_cwd < best_cwd)
+                          replace = true;
+                      }
+                    }
+                    if (replace)
                     {
                       best_entry = src_tbl + j;
-                      best_e_k = ones_count;
+                      best_cwd_len = cand_len;
+                      best_rho_pop = cand_rho_pop;
+                      best_e_k_pop = cand_e_pop;
+                      best_cwd = cand_cwd;
                     }
                   }
             }
           }
-          else // u_off = 0
+          else
           {
+            int best_cwd_len = INT_MAX;
+            int best_rho_pop = -1;
+            int best_e_k_pop = -1;
+            int best_cwd = INT_MAX;
             for (size_t j = 0; j < tbl_size; ++j)
             {
               if (src_tbl[j].c_q == c_q && src_tbl[j].rho == rho)
                 if (src_tbl[j].u_off == 0)
                 {
-                  best_entry = src_tbl + j;
-                  break;
+                  int cand_len = src_tbl[j].cwd_len;
+                  int cand_rho_pop =
+                    pattern_popcnt[src_tbl[j].e_k & rho];
+                  int cand_e_pop = pattern_popcnt[src_tbl[j].e_k];
+                  int cand_cwd = src_tbl[j].cwd;
+                  bool replace = best_entry == NULL;
+                  if (!replace && cand_len < best_cwd_len)
+                    replace = true;
+                  else if (!replace && cand_len == best_cwd_len)
+                  {
+                    if (cand_rho_pop > best_rho_pop)
+                      replace = true;
+                    else if (cand_rho_pop == best_rho_pop)
+                    {
+                      if (cand_e_pop > best_e_k_pop)
+                        replace = true;
+                      else if (cand_e_pop == best_e_k_pop && cand_cwd < best_cwd)
+                        replace = true;
+                    }
+                  }
+                  if (replace)
+                  {
+                    best_entry = src_tbl + j;
+                    best_cwd_len = cand_len;
+                    best_rho_pop = cand_rho_pop;
+                    best_e_k_pop = cand_e_pop;
+                    best_cwd = cand_cwd;
+                  }
                 }
             }
           }
@@ -138,10 +318,12 @@ namespace ojph {
         }
       }
 
-      vlc_src_table tbl1[] = {
+      fill_vlc_alt_u32(vlc_tbl0, vlc_tbl0_alt, tbl0, tbl0_size);
+
+      vlc_src_row tbl1[] = {
     #include "table1.h"
       };
-      size_t tbl1_size = sizeof(tbl1) / sizeof(vlc_src_table);
+      size_t tbl1_size = sizeof(tbl1) / sizeof(vlc_src_row);
 
       src_tbl = tbl1;
       tgt_tbl = vlc_tbl1;
@@ -153,36 +335,89 @@ namespace ojph {
           tgt_tbl[i] = 0;
         else
         {
-          vlc_src_table *best_entry = NULL;
-          if (emb) // u_off = 1
+          vlc_src_row *best_entry = NULL;
+          if (emb)
           {
-            int best_e_k = -1;
+            int best_cwd_len = INT_MAX;
+            int best_rho_pop = -1;
+            int best_e_k_pop = -1;
+            int best_cwd = INT_MAX;
             for (size_t j = 0; j < tbl_size; ++j)
             {
               if (src_tbl[j].c_q == c_q && src_tbl[j].rho == rho)
                 if (src_tbl[j].u_off == 1)
                   if ((emb & src_tbl[j].e_k) == src_tbl[j].e_1)
                   {
-                    //now we need to find the smallest cwd with the highest
-                    // number of bits set in e_k
-                    int ones_count = pattern_popcnt[src_tbl[j].e_k];
-                    if (ones_count >= best_e_k)
+                    int cand_len = src_tbl[j].cwd_len;
+                    int cand_rho_pop =
+                      pattern_popcnt[src_tbl[j].e_k & rho];
+                    int cand_e_pop = pattern_popcnt[src_tbl[j].e_k];
+                    int cand_cwd = src_tbl[j].cwd;
+                    bool replace = best_entry == NULL;
+                    if (!replace && cand_len < best_cwd_len)
+                      replace = true;
+                    else if (!replace && cand_len == best_cwd_len)
+                    {
+                      if (cand_rho_pop > best_rho_pop)
+                        replace = true;
+                      else if (cand_rho_pop == best_rho_pop)
+                      {
+                        if (cand_e_pop > best_e_k_pop)
+                          replace = true;
+                        else if (cand_e_pop == best_e_k_pop && cand_cwd < best_cwd)
+                          replace = true;
+                      }
+                    }
+                    if (replace)
                     {
                       best_entry = src_tbl + j;
-                      best_e_k = ones_count;
+                      best_cwd_len = cand_len;
+                      best_rho_pop = cand_rho_pop;
+                      best_e_k_pop = cand_e_pop;
+                      best_cwd = cand_cwd;
                     }
                   }
             }
           }
-          else // u_off = 0
+          else
           {
+            int best_cwd_len = INT_MAX;
+            int best_rho_pop = -1;
+            int best_e_k_pop = -1;
+            int best_cwd = INT_MAX;
             for (size_t j = 0; j < tbl_size; ++j)
             {
               if (src_tbl[j].c_q == c_q && src_tbl[j].rho == rho)
                 if (src_tbl[j].u_off == 0)
                 {
-                  best_entry = src_tbl + j;
-                  break;
+                  int cand_len = src_tbl[j].cwd_len;
+                  int cand_rho_pop =
+                    pattern_popcnt[src_tbl[j].e_k & rho];
+                  int cand_e_pop = pattern_popcnt[src_tbl[j].e_k];
+                  int cand_cwd = src_tbl[j].cwd;
+                  bool replace = best_entry == NULL;
+                  if (!replace && cand_len < best_cwd_len)
+                    replace = true;
+                  else if (!replace && cand_len == best_cwd_len)
+                  {
+                    if (cand_rho_pop > best_rho_pop)
+                      replace = true;
+                    else if (cand_rho_pop == best_rho_pop)
+                    {
+                      if (cand_e_pop > best_e_k_pop)
+                        replace = true;
+                      else if (cand_e_pop == best_e_k_pop && cand_cwd < best_cwd)
+                        replace = true;
+                    }
+                  }
+                  if (replace)
+                  {
+                    best_entry = src_tbl + j;
+                    best_cwd_len = cand_len;
+                    best_rho_pop = cand_rho_pop;
+                    best_e_k_pop = cand_e_pop;
+                    best_cwd = cand_cwd;
+                  }
                 }
             }
           }
@@ -192,6 +427,7 @@ namespace ojph {
         }
       }
 
+      fill_vlc_alt_u32(vlc_tbl1, vlc_tbl1_alt, tbl1, tbl1_size);
 
       return true;
     }
@@ -227,6 +463,8 @@ namespace ojph {
       std::call_once(tables_initialized_flag, []() {
         memset(vlc_tbl0, 0, 2048 * sizeof(ui32));
         memset(vlc_tbl1, 0, 2048 * sizeof(ui32));
+        memset(vlc_tbl0_alt, 0, 2048 * sizeof(ui32));
+        memset(vlc_tbl1_alt, 0, 2048 * sizeof(ui32));
         tables_initialized = vlc_init_tables();
         tables_initialized = tables_initialized && uvlc_init_tables();
       });
@@ -782,15 +1020,35 @@ static void update_lcxp(ui32 x, __m512i &prev_cx_val_vec,
     cx_val_vec[x] = _mm512_or_epi32(tmp, tmp1);
 }
 
-static __m512i cal_tuple(__m512i &cq_vec, __m512i &rho_vec,
-                         __m512i &eps_vec, ui32 *vlc_tbl)
+static __m512i ht_ms_msum_epi32_avx512(__m512i e_k, __m512i uq, __m512i rho)
 {
-    /* tuple[i] = vlc_tbl1[(c_q[i] << 8) + (rho[i] << 4) + eps[i]]; */
-    auto tmp = _mm512_slli_epi32(cq_vec, 8);
-    auto tmp1 = _mm512_slli_epi32(rho_vec, 4);
-    tmp = _mm512_add_epi32(tmp, tmp1);
-    tmp = _mm512_add_epi32(tmp, eps_vec);
-    return _mm512_i32gather_epi32(tmp, vlc_tbl, 4);
+  __m512i sum = ZERO;
+  for (int b = 0; b < 4; ++b)
+  {
+    __m512i eb = _mm512_and_epi32(e_k, _mm512_set1_epi32(1 << b));
+    eb = _mm512_srli_epi32(eb, b);
+    __m512i t = _mm512_sub_epi32(uq, eb);
+    __mmask16 m = _mm512_cmpneq_epi32_mask(
+        _mm512_and_epi32(rho, _mm512_set1_epi32(1 << b)), ZERO);
+    sum = _mm512_mask_add_epi32(sum, m, sum, t);
+  }
+  return sum;
+}
+
+static __m512i ht_tuple_score_avx512(__m512i packed, __m512i uq, __m512i rho)
+{
+  __m512i p16 = _mm512_and_epi32(packed, _mm512_set1_epi32(0xFFFF));
+  __m512i ek = _mm512_and_epi32(p16, _mm512_set1_epi32(15));
+  __m512i cl = _mm512_and_epi32(_mm512_srli_epi32(p16, 4), _mm512_set1_epi32(7));
+  return _mm512_add_epi32(cl, ht_ms_msum_epi32_avx512(ek, uq, rho));
+}
+
+static __m512i ht_pick_tuple_avx512(__m512i a, __m512i b, __m512i uq, __m512i rho)
+{
+  __m512i sa = ht_tuple_score_avx512(a, uq, rho);
+  __m512i sb = ht_tuple_score_avx512(b, uq, rho);
+  __mmask16 use_b = _mm512_cmpgt_epi32_mask(sa, sb);
+  return _mm512_mask_mov_epi32(a, use_b, b);
 }
 
 static __m512i proc_cq1(ui32 x, __m512i *cx_val_vec, __m512i &rho_vec,
@@ -1016,15 +1274,16 @@ void ojph_encode_codeblock_avx512(ui32* buf, ui32 missing_msbs,
 
     ui32 width = (_width + 31) & ~31u;
     ui32 ignore = width - _width;
-    const int ms_size = (16384 * 16 + 14) / 15; //more than enough
-    const int mel_vlc_size = 3072;              //more than enough
-    const int mel_size = 192;
-    const int vlc_size = mel_vlc_size - mel_size;
-
-    ui8 ms_buf[ms_size];
-    ui8 mel_vlc_buf[mel_vlc_size];
-    ui8 *mel_buf = mel_vlc_buf;
-    ui8 *vlc_buf = mel_vlc_buf + mel_size;
+    const ui32 ms_size = ht_ms32_scratch_bytes_padded(width, height);
+    const ui32 mel_vlc_size = ht_mel_vlc_scratch_bytes_padded(width, height);
+    const ui32 mel_size = k_ht_mel_scratch_bytes;
+    const ui32 vlc_size = mel_vlc_size - mel_size;
+    const ui32 ht_slab_bytes = ms_size + mel_vlc_size;
+    ui8* const ht_slab = OJPH_MS_STACK_ALLOC(ht_slab_bytes);
+    ui8* const ms_buf = ht_slab;
+    ui8* const mel_vlc_buf = ht_slab + ms_size;
+    ui8* const mel_buf = mel_vlc_buf;
+    ui8* const vlc_buf = mel_vlc_buf + mel_size;
 
     mel_struct mel;
     mel_init(&mel, mel_size, mel_buf);
@@ -1052,13 +1311,16 @@ void ojph_encode_codeblock_avx512(ui32* buf, ui32 missing_msbs,
       14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0, 15
     );
 
-    __m512i e_val_vec[33];
-    for (ui32 i = 0; i < 32; ++i) {
+    ui32 n_loop = (width + 31) / 32;
+    assert(n_loop < 34u);
+
+    __m512i e_val_vec[34];
+    __m512i cx_val_vec[34];
+    for (ui32 i = 0; i <= n_loop; ++i) {
         e_val_vec[i] = ZERO;
+        cx_val_vec[i] = ZERO;
     }
     __m512i prev_e_val_vec = ZERO;
-
-    __m512i cx_val_vec[33];
     __m512i prev_cx_val_vec = ZERO;
 
     __m512i prev_cq_vec = ZERO;
@@ -1072,8 +1334,6 @@ void ojph_encode_codeblock_avx512(ui32* buf, ui32 missing_msbs,
     __m512i rho_vec;
     __m512i e_qmax_vec;
     __m512i kappa_vec;
-
-    ui32 n_loop = (width + 31) / 32;
 
     ui32 *vlc_tbl = vlc_tbl0;
     fn_proc_cq proc_cq = proc_cq1;
@@ -1093,6 +1353,8 @@ void ojph_encode_codeblock_avx512(ui32* buf, ui32 missing_msbs,
         prev_cx_val_vec = ZERO;
 
         ui32 *sp = buf + y * stride;
+        ui32 u_q[16];
+        ui32 tuple[16];
 
         /* 32 bytes per iteration */
         for (ui32 x = 0; x < n_loop; ++x) {
@@ -1160,7 +1422,17 @@ void ojph_encode_codeblock_avx512(ui32* buf, ui32 missing_msbs,
             auto u_q_vec = _mm512_sub_epi32(uq_vec, kappa_vec);
 
             auto eps_vec = cal_eps_vec(eq_vec, u_q_vec, e_qmax_vec);
-            __m512i tuple_vec = cal_tuple(cq_vec, rho_vec, eps_vec, vlc_tbl);
+            auto idx_gather = _mm512_add_epi32(
+                _mm512_add_epi32(_mm512_slli_epi32(cq_vec, 8),
+                                 _mm512_slli_epi32(rho_vec, 4)),
+                eps_vec);
+            __m512i tuple_vec =
+                _mm512_i32gather_epi32(idx_gather, vlc_tbl, 4);
+            const ui32 *vlc_alt_tbl =
+                (vlc_tbl == vlc_tbl0) ? vlc_tbl0_alt : vlc_tbl1_alt;
+            __m512i alt_vec =
+                _mm512_i32gather_epi32(idx_gather, vlc_alt_tbl, 4);
+            tuple_vec = ht_pick_tuple_avx512(tuple_vec, alt_vec, uq_vec, rho_vec);
             ui32 _ignore = ((n_loop - 1) == x) ? ignore : 0;
 
             proc_mel_encode(&mel, cq_vec, rho_vec, u_q_vec, _ignore,
@@ -1170,8 +1442,6 @@ void ojph_encode_codeblock_avx512(ui32* buf, ui32 missing_msbs,
 
             // vlc_encode(&vlc, tuple[i*2+0] >> 8, (tuple[i*2+0] >> 4) & 7);
             // vlc_encode(&vlc, tuple[i*2+1] >> 8, (tuple[i*2+1] >> 4) & 7);
-            ui32 u_q[16];
-            ui32 tuple[16];
             /* The tuple is scaled by 4 due to:
              * vlc_encode(&vlc, tuple0 >> 8, (tuple0 >> 4) & 7, true);
              * So in the vlc_encode, the tuple will only be scaled by 2.
@@ -1197,6 +1467,7 @@ void ojph_encode_codeblock_avx512(ui32* buf, ui32 missing_msbs,
 
     //copy to elastic
     lengths[0] = mel.pos + vlc.pos + ms.pos;
+    lengths[1] = 0;
     elastic->get_buffer(mel.pos + vlc.pos + ms.pos, coded);
     memcpy(coded->buf, ms.buf, ms.pos);
     memcpy(coded->buf + ms.pos, mel.buf, mel.pos);

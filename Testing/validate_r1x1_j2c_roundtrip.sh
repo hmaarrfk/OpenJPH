@@ -2,7 +2,7 @@
 set -euo pipefail
 
 conda_env_name="mcam_dev"
-num_decomps="${NUM_DECOMPS:-5}"
+num_decomps="${NUM_DECOMPS:-3}"
 kdu_expand_executable="${KDU_EXPAND:-kdu_expand}"
 kdu_compress_executable="${KDU_COMPRESS:-kdu_compress}"
 work_dir="${TMPDIR:-/tmp}/openjph_r1x1_validate_$$"

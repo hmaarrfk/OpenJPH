@@ -46,11 +46,40 @@
 #include "ojph_codeblock.h"
 #include "ojph_subband.h"
 #include "ojph_resolution.h"
+#include "ojph_arch.h"
 
 namespace ojph {
 
   namespace local
   {
+
+    static ui32 ht_cleanup_missing_msbs32(ui32 mag_or, ui32 K_max)
+    {
+      assert(mag_or != 0);
+      ui32 mag_span = mag_or >> (31u - K_max);
+      assert(mag_span != 0);
+      ui32 idx = 31u - count_leading_zeros(mag_span);
+      ui32 missing = K_max - 1u - idx;
+      if (missing < 1u)
+        missing = 1u;
+      else if (missing >= K_max)
+        missing = K_max - 1u;
+      return missing;
+    }
+
+    static ui32 ht_cleanup_missing_msbs64(ui64 mag_or, ui32 K_max)
+    {
+      assert(mag_or != 0);
+      ui64 mag_span = mag_or >> (63ull - K_max);
+      assert(mag_span != 0);
+      ui32 idx = (ui32)(63ull - count_leading_zeros(mag_span));
+      ui32 missing = K_max - 1u - idx;
+      if (missing < 1u)
+        missing = 1u;
+      else if (missing >= K_max)
+        missing = K_max - 1u;
+      return missing;
+    }
 
     //////////////////////////////////////////////////////////////////////////
     void codeblock::pre_alloc(codestream *codestream, const size& nominal, 
@@ -144,12 +173,20 @@ namespace ojph {
         ui32 mv = this->codeblock_functions.find_max_val32(max_val32);
         if (mv >= 1u << (31 - K_max))
         {
-          coded_cb->missing_msbs = K_max - 1;
+          ui32 true_missing_msbs = ht_cleanup_missing_msbs32(mv, K_max);
+          ui32 pkt_passes = 1u;
+          ui32 tag_missing_msbs = true_missing_msbs;
+          if (true_missing_msbs >= 2u)
+          {
+            pkt_passes = 4u;
+            tag_missing_msbs = true_missing_msbs - 1u;
+          }
+          coded_cb->missing_msbs = tag_missing_msbs;
           assert(coded_cb->missing_msbs > 0);
           assert(coded_cb->missing_msbs < K_max);
-          coded_cb->num_passes = 1;
-          
-          this->codeblock_functions.encode_cb32(buf32, K_max-1, 1,
+          coded_cb->num_passes = pkt_passes;
+
+          this->codeblock_functions.encode_cb32(buf32, true_missing_msbs, 1,
             cb_size.w, cb_size.h, stride, coded_cb->pass_length,
             elastic, coded_cb->next_coded);
         }
@@ -160,12 +197,20 @@ namespace ojph {
         ui64 mv = this->codeblock_functions.find_max_val64(max_val64);
         if (mv >= 1ULL << (63 - K_max))
         {
-          coded_cb->missing_msbs = K_max - 1;
+          ui32 true_missing_msbs = ht_cleanup_missing_msbs64(mv, K_max);
+          ui32 pkt_passes = 1u;
+          ui32 tag_missing_msbs = true_missing_msbs;
+          if (true_missing_msbs >= 2u)
+          {
+            pkt_passes = 4u;
+            tag_missing_msbs = true_missing_msbs - 1u;
+          }
+          coded_cb->missing_msbs = tag_missing_msbs;
           assert(coded_cb->missing_msbs > 0);
           assert(coded_cb->missing_msbs < K_max);
-          coded_cb->num_passes = 1;
-          
-          this->codeblock_functions.encode_cb64(buf64, K_max-1, 1,
+          coded_cb->num_passes = pkt_passes;
+
+          this->codeblock_functions.encode_cb64(buf64, true_missing_msbs, 1,
             cb_size.w, cb_size.h, stride, coded_cb->pass_length,
             elastic, coded_cb->next_coded);
         }

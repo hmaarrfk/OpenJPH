@@ -34,6 +34,7 @@ add_executable(
   test_executables
   test_executables.cpp
   test_r1x1_wavelet.cpp
+  test_ht_r1x1_circle_filesize.cpp
 )
 
 target_link_libraries(
