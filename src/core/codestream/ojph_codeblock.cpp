@@ -126,6 +126,40 @@ namespace ojph {
     }
 
     //////////////////////////////////////////////////////////////////////////
+    // transfer samples between a 16-bit line and a 32-bit codeblock,
+    // converting to/from sign and magnitude; equivalent to
+    // gen_rev_tx_to_cb32/gen_rev_tx_from_cb32 with a 16-bit line
+    static void rev_tx_to_cb16(const si16 *sp, ui32 *dp, ui32 K_max,
+                               ui32 count, ui32* max_val)
+    {
+      ui32 shift = 31 - K_max;
+      ui32 tmax = *max_val;
+      for (ui32 i = count; i > 0; --i)
+      {
+        si32 v = *sp++;
+        ui32 sign = v >= 0 ? 0U : 0x80000000U;
+        ui32 val = (ui32)(v >= 0 ? v : -v);
+        val <<= shift;
+        *dp++ = sign | val;
+        tmax |= val; // it is more efficient to use or than max
+      }
+      *max_val = tmax;
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    static void rev_tx_from_cb16(const ui32 *sp, si16 *dp, ui32 K_max,
+                                 ui32 count)
+    {
+      ui32 shift = 31 - K_max;
+      for (ui32 i = count; i > 0; --i)
+      {
+        ui32 v = *sp++;
+        si32 val = (si32)((v & 0x7FFFFFFFU) >> shift);
+        *dp++ = (si16)((v & 0x80000000U) ? -val : val);
+      }
+    }
+
+    //////////////////////////////////////////////////////////////////////////
     void codeblock::push(line_buf *line)
     {
       // Most codeblocks of mask-like or smooth images are entirely zero;
@@ -137,6 +171,24 @@ namespace ojph {
       // convert to sign and magnitude and keep max_val
       if (precision == BUF32)
       {
+        if (line->flags & line_buf::LFT_16BIT)
+        { // 16-bit lines feed 32-bit codeblocks
+          const si16 *sp = line->i16 + line_offset;
+          if (zero_prefix_lines == cur_line &&
+              is_all_zero(sp, cb_size.w))
+          {
+            ++zero_prefix_lines;
+            ++cur_line;
+            return;
+          }
+          if (zero_prefix_lines > 0 && zero_prefix_lines == cur_line)
+            memset(buf32, 0,
+                   (size_t)zero_prefix_lines * stride * sizeof(ui32));
+          ui32 *dp = buf32 + cur_line * stride;
+          rev_tx_to_cb16(sp, dp, K_max, cb_size.w, max_val32);
+          ++cur_line;
+          return;
+        }
         assert(line->flags & line_buf::LFT_32BIT);
         const void *sp = (line->flags & line_buf::LFT_INTEGER)
           ? (const void*)(line->i32 + line_offset)
@@ -271,6 +323,19 @@ namespace ojph {
       //convert to sign and magnitude
       if (precision == BUF32)
       {
+        if (line->flags & line_buf::LFT_16BIT)
+        { // 16-bit lines are fed from 32-bit codeblocks
+          si16 *dp = line->i16 + line_offset;
+          if (!zero_block)
+          {
+            const ui32 *sp = buf32 + cur_line * stride;
+            rev_tx_from_cb16(sp, dp, K_max, cb_size.w);
+          }
+          else
+            memset(dp, 0, (size_t)cb_size.w * sizeof(si16));
+          ++cur_line;
+          return;
+        }
         assert(line->flags & line_buf::LFT_32BIT);
         void *dp = (line->flags & line_buf::LFT_INTEGER)
           ? (void*)(line->i32 + line_offset)

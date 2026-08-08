@@ -266,11 +266,19 @@ namespace ojph {
         ui32 precision = qp->propose_precision(cdp);
         const param_atk* atk = cdp->access_atk();
         bool reversible = atk->is_reversible();
+        bool use16 = can_use_16bit_lines(qp, cdp, codestream->get_siz(),
+                                         comp_num);
 
         ui32 width = res_rect.siz.w + 1;
         if (reversible)
         {
-          if (precision <= 32) {
+          if (use16) {
+            for (ui32 i = 0; i < num_steps; ++i)
+              allocator->pre_alloc_data<si16>(width, 1);
+            allocator->pre_alloc_data<si16>(width, 1);
+            allocator->pre_alloc_data<si16>(width, 1);
+          }
+          else if (precision <= 32) {
             for (ui32 i = 0; i < num_steps; ++i)
               allocator->pre_alloc_data<si32>(width, 1);
             allocator->pre_alloc_data<si32>(width, 1);
@@ -539,12 +547,24 @@ namespace ojph {
 
         const param_qcd* qp = codestream->access_qcd()->get_qcc(comp_num);
         ui32 precision = qp->propose_precision(cdp);
+        bool use16 = can_use_16bit_lines(qp, cdp, codestream->get_siz(),
+                                         comp_num);
 
         // initiate storage of line_buf
         ui32 width = res_rect.siz.w + 1;
         if (this->reversible)
         {
-          if (precision <= 32)
+          if (use16)
+          {
+            for (ui32 i = 0; i < num_steps; ++i)
+              ssp[i].line->wrap(
+                allocator->post_alloc_data<si16>(width, 1), width, 1);
+            sig->line->wrap(
+              allocator->post_alloc_data<si16>(width, 1), width, 1);
+            aug->line->wrap(
+              allocator->post_alloc_data<si16>(width, 1), width, 1);
+          }
+          else if (precision <= 32)
           {
             for (ui32 i = 0; i < num_steps; ++i)
               ssp[i].line->wrap(
@@ -670,7 +690,13 @@ namespace ojph {
           else
           {
             // vertical transform
-            if (aug->line->flags & line_buf::LFT_32BIT)
+            if (aug->line->flags & line_buf::LFT_16BIT)
+            {
+              si16* sp = aug->line->i16;
+              for (ui32 i = width; i > 0; --i, ++sp)
+                *sp = (si16)(*sp << 1);
+            }
+            else if (aug->line->flags & line_buf::LFT_32BIT)
             {
               si32* sp = aug->line->i32;
               for (ui32 i = width; i > 0; --i)
@@ -871,7 +897,13 @@ namespace ojph {
                 memcpy(aug->line->p, bands[2].pull_line()->p,
                   (size_t)width
                   * (aug->line->flags & line_buf::LFT_SIZE_MASK));
-              if (aug->line->flags & line_buf::LFT_32BIT)
+              if (aug->line->flags & line_buf::LFT_16BIT)
+              {
+                si16* sp = aug->line->i16;
+                for (ui32 i = width; i > 0; --i, ++sp)
+                  *sp = (si16)(*sp >> 1);
+              }
+              else if (aug->line->flags & line_buf::LFT_32BIT)
               {
                 si32* sp = aug->line->i32;
                 for (ui32 i = width; i > 0; --i)

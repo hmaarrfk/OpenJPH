@@ -1248,6 +1248,26 @@ namespace ojph {
     private: // on restart, already allocated param_atk objs are stored here
       param_atk* avail;
     };
+    ///////////////////////////////////////////////////////////////////////////
+    // True when reversible transformation lines can use 16-bit storage:
+    // the coefficients must fit in 16 bits (propose_precision accounts for
+    // the sign bit and a coder margin), and the transformation must be a
+    // predict-only arbitrary kernel, whose generic transform paths support
+    // 16-bit lines. Restricted to unsigned samples without a colour
+    // transform, so no per-sample treatment beyond the level shift applies.
+    static inline bool can_use_16bit_lines(const param_qcd* qp,
+                                           const param_cod* cdp,
+                                           const param_siz* sz,
+                                           ui32 comp_num)
+    {
+      const param_atk* atk = cdp->access_atk();
+      return atk != NULL && atk->is_reversible() &&
+             qp->propose_precision(cdp) <= 16 &&
+             atk->is_whole_sample() == false && atk->is_predict_only() &&
+             cdp->is_employing_color_transform() == false &&
+             sz->is_signed(comp_num) == false;
+    }
+
   } // !local namespace
 } // !ojph namespace
 

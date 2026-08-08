@@ -182,6 +182,8 @@ namespace ojph {
     ui32 pre_size;
     ui32 flags;
     union {
+      si16* i16;  // 16bit integer type, used for lossless compression of
+                  // low bit-depth data with predict-only kernels
       si32* i32;  // 32bit integer type, used for lossless compression
       si64* i64;  // 64bit integer type, used for lossless compression
       float* f32; // float type, used for lossy compression

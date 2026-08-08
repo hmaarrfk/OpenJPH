@@ -582,7 +582,7 @@ namespace ojph {
         else
         { // general case
           for (ui32 i = h_width; i > 0; --i, sp++, dp++)
-            *dp += (b + a * sp[0]) >> e;
+            *dp = (T)(*dp + ((b + a * sp[0]) >> e));
         }
 
         // swap buffers
@@ -650,13 +650,19 @@ namespace ojph {
       {
         if (is_fused_prev_sample_kernel(atk))
         {
-          if (src->flags & line_buf::LFT_32BIT)
+          if (src->flags & line_buf::LFT_16BIT)
+            gen_rev_horz_ana_prev_T<si16>(ldst->i16, hdst->i16, src->i16,
+                                          width, even);
+          else if (src->flags & line_buf::LFT_32BIT)
             gen_rev_horz_ana_prev_T<si32>(ldst->i32, hdst->i32, src->i32,
                                           width, even);
           else
             gen_rev_horz_ana_prev_T<si64>(ldst->i64, hdst->i64, src->i64,
                                           width, even);
         }
+        else if (src->flags & line_buf::LFT_16BIT)
+          gen_rev_horz_ana_arb_T<si16>(atk, ldst->i16, hdst->i16, src->i16,
+                                       width, even);
         else if (src->flags & line_buf::LFT_32BIT)
           gen_rev_horz_ana_arb_T<si32>(atk, ldst->i32, hdst->i32, src->i32,
                                        width, even);
@@ -666,7 +672,13 @@ namespace ojph {
       }
       else
       {
-        if (src->flags & line_buf::LFT_32BIT) {
+        if (src->flags & line_buf::LFT_16BIT) {
+          if (even)
+            ldst->i16[0] = src->i16[0];
+          else
+            hdst->i16[0] = (si16)(src->i16[0] << 1);
+        }
+        else if (src->flags & line_buf::LFT_32BIT) {
           if (even)
             ldst->i32[0] = src->i32[0];
           else
@@ -724,7 +736,7 @@ namespace ojph {
         else
         { // general case
           for (ui32 i = aug_width; i > 0; --i, sp++, dp++)
-            *dp -= (b + a * sp[0]) >> e;
+            *dp = (T)(*dp - ((b + a * sp[0]) >> e));
         }
 
         // swap buffers
@@ -793,13 +805,19 @@ namespace ojph {
       {
         if (is_fused_prev_sample_kernel(atk))
         {
-          if (dst->flags & line_buf::LFT_32BIT)
+          if (dst->flags & line_buf::LFT_16BIT)
+            gen_rev_horz_syn_prev_T<si16>(dst->i16, lsrc->i16, hsrc->i16,
+                                          width, even);
+          else if (dst->flags & line_buf::LFT_32BIT)
             gen_rev_horz_syn_prev_T<si32>(dst->i32, lsrc->i32, hsrc->i32,
                                           width, even);
           else
             gen_rev_horz_syn_prev_T<si64>(dst->i64, lsrc->i64, hsrc->i64,
                                           width, even);
         }
+        else if (dst->flags & line_buf::LFT_16BIT)
+          gen_rev_horz_syn_arb_T<si16>(atk, dst->i16, lsrc->i16, hsrc->i16,
+                                       width, even);
         else if (dst->flags & line_buf::LFT_32BIT)
           gen_rev_horz_syn_arb_T<si32>(atk, dst->i32, lsrc->i32, hsrc->i32,
                                        width, even);
@@ -809,7 +827,13 @@ namespace ojph {
       }
       else
       {
-        if (dst->flags & line_buf::LFT_32BIT) {
+        if (dst->flags & line_buf::LFT_16BIT) {
+          if (even)
+            dst->i16[0] = lsrc->i16[0];
+          else
+            dst->i16[0] = (si16)(hsrc->i16[0] >> 1);
+        }
+        else if (dst->flags & line_buf::LFT_32BIT) {
           if (even)
             dst->i32[0] = lsrc->i32[0];
           else
@@ -859,11 +883,11 @@ namespace ojph {
       else
       { // general case
         if (synthesis)
-          for (ui32 i = repeat; i > 0; --i)
-            *dst++ -= (b + a * *sp++) >> e;
+          for (ui32 i = repeat; i > 0; --i, ++dst, ++sp)
+            *dst = (T)(*dst - ((b + a * *sp) >> e));
         else
-          for (ui32 i = repeat; i > 0; --i)
-            *dst++ += (b + a * *sp++) >> e;
+          for (ui32 i = repeat; i > 0; --i, ++dst, ++sp)
+            *dst = (T)(*dst + ((b + a * *sp) >> e));
       }
     }
 
@@ -872,7 +896,13 @@ namespace ojph {
                                const line_buf* aug, ui32 repeat,
                                bool synthesis)
     {
-      if (aug->flags & line_buf::LFT_32BIT)
+      if (aug->flags & line_buf::LFT_16BIT)
+      {
+        assert(src == NULL || src->flags & line_buf::LFT_16BIT);
+        gen_rev_vert_step_one_tap_T<si16>(s, src->i16, aug->i16, repeat,
+                                          synthesis);
+      }
+      else if (aug->flags & line_buf::LFT_32BIT)
       {
         assert(src == NULL || src->flags & line_buf::LFT_32BIT);
         gen_rev_vert_step_one_tap_T<si32>(s, src->i32, aug->i32, repeat,
