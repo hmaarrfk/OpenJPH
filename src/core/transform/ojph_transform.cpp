@@ -205,6 +205,13 @@ namespace ojph {
 
     #endif // !(defined(OJPH_ARCH_X86_64) || defined(OJPH_ARCH_I386))
 
+    #ifdef OJPH_ENABLE_HWY
+        // Google Highway implementations; this replaces some of the
+        // reversible transform functions selected above, keeping the
+        // replaced functions as fallbacks for the cases it does not handle.
+        hwy_install_rev_transforms();
+    #endif
+
   #endif // !OJPH_DISABLE_SIMD
 
 #else // OJPH_ENABLE_WASM_SIMD
