@@ -1,0 +1,114 @@
+
+---
+events:
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/home/mark/miniforge3/envs/mcam_dev/lib/python3.12/site-packages/cmake/data/share/cmake-4.3/Modules/CMakeDetermineSystem.cmake:12 (find_program)"
+      - "CMakeLists.txt:16 (project)"
+    mode: "program"
+    variable: "CMAKE_UNAME"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "NEVER"
+      SearchAppBundle: "NEVER"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "uname"
+    candidate_directories:
+      - "/home/mark/miniforge3/envs/mcam_dev/bin/"
+      - "/home/mark/miniforge3/envs/mcam_dev/sbin/"
+      - "/home/mark/miniforge3/envs/mcam_dev/"
+      - "/home/mark/miniforge3/envs/mcam_dev/x86_64-conda-linux-gnu/sysroot/usr/bin/"
+      - "/home/mark/miniforge3/envs/mcam_dev/x86_64-conda-linux-gnu/sysroot/usr/sbin/"
+      - "/home/mark/miniforge3/envs/mcam_dev/x86_64-conda-linux-gnu/sysroot/usr/"
+      - "/usr/lib/ccache/"
+      - "/home/mark/bin/"
+      - "/home/mark/.local/bin/"
+      - "/home/mark/Fiji/java/linux64/zulu21.42.19-ca-jdk21.0.7-linux_x64/bin/"
+      - "/home/mark/.pixi/bin/"
+      - "/home/mark/.gem/ruby/2.5.0/bin/"
+      - "/home/mark/miniforge3/envs/mcam_dev/bin/"
+      - "/home/mark/miniforge3/condabin/"
+      - "/usr/local/sbin/"
+      - "/usr/local/bin/"
+      - "/usr/sbin/"
+      - "/usr/bin/"
+      - "/sbin/"
+      - "/bin/"
+      - "/usr/games/"
+      - "/usr/local/games/"
+      - "/snap/bin/"
+      - "/home/mark/.claude/plugins/cache/claude-plugins-official/pyright-lsp/1.0.0/bin/"
+      - "/home/mark/.claude/plugins/cache/claude-plugins-official/lua-lsp/1.0.0/bin/"
+      - "/home/mark/.claude/plugins/cache/claude-plugins-official/rust-analyzer-lsp/1.0.0/bin/"
+      - "/home/mark/.claude/plugins/cache/claude-plugins-official/playwright/unknown/bin/"
+      - "/home/mark/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin/"
+    searched_directories:
+      - "/home/mark/miniforge3/envs/mcam_dev/bin/uname"
+      - "/home/mark/miniforge3/envs/mcam_dev/sbin/uname"
+      - "/home/mark/miniforge3/envs/mcam_dev/uname"
+      - "/home/mark/miniforge3/envs/mcam_dev/x86_64-conda-linux-gnu/sysroot/usr/bin/uname"
+      - "/home/mark/miniforge3/envs/mcam_dev/x86_64-conda-linux-gnu/sysroot/usr/sbin/uname"
+      - "/home/mark/miniforge3/envs/mcam_dev/x86_64-conda-linux-gnu/sysroot/usr/uname"
+      - "/usr/lib/ccache/uname"
+      - "/home/mark/bin/uname"
+      - "/home/mark/.local/bin/uname"
+      - "/home/mark/Fiji/java/linux64/zulu21.42.19-ca-jdk21.0.7-linux_x64/bin/uname"
+      - "/home/mark/.pixi/bin/uname"
+      - "/home/mark/.gem/ruby/2.5.0/bin/uname"
+      - "/home/mark/miniforge3/envs/mcam_dev/bin/uname"
+      - "/home/mark/miniforge3/condabin/uname"
+      - "/usr/local/sbin/uname"
+      - "/usr/local/bin/uname"
+      - "/usr/sbin/uname"
+    found: "/usr/bin/uname"
+    search_context:
+      ENV{CMAKE_PREFIX_PATH}:
+        - "/home/mark/miniforge3/envs/mcam_dev"
+        - "/home/mark/miniforge3/envs/mcam_dev/x86_64-conda-linux-gnu/sysroot/usr"
+      ENV{PATH}:
+        - "/usr/lib/ccache"
+        - "/home/mark/bin"
+        - "/home/mark/.local/bin"
+        - "/home/mark/Fiji/java/linux64/zulu21.42.19-ca-jdk21.0.7-linux_x64/bin"
+        - "/home/mark/.pixi/bin"
+        - "/usr/lib/ccache"
+        - "/home/mark/.gem/ruby/2.5.0/bin"
+        - "/home/mark/bin"
+        - "/usr/lib/ccache"
+        - "/home/mark/bin"
+        - "/home/mark/.local/bin"
+        - "/home/mark/Fiji/java/linux64/zulu21.42.19-ca-jdk21.0.7-linux_x64/bin"
+        - "/home/mark/.pixi/bin"
+        - "/home/mark/miniforge3/envs/mcam_dev/bin"
+        - "/home/mark/miniforge3/condabin"
+        - "/usr/lib/ccache"
+        - "/home/mark/.gem/ruby/2.5.0/bin"
+        - "/home/mark/bin"
+        - "/usr/local/sbin"
+        - "/usr/local/bin"
+        - "/usr/sbin"
+        - "/usr/bin"
+        - "/sbin"
+        - "/bin"
+        - "/usr/games"
+        - "/usr/local/games"
+        - "/snap/bin"
+        - "/home/mark/.claude/plugins/cache/claude-plugins-official/pyright-lsp/1.0.0/bin"
+        - "/home/mark/.claude/plugins/cache/claude-plugins-official/lua-lsp/1.0.0/bin"
+        - "/home/mark/.claude/plugins/cache/claude-plugins-official/rust-analyzer-lsp/1.0.0/bin"
+        - "/home/mark/.claude/plugins/cache/claude-plugins-official/playwright/unknown/bin"
+        - "/home/mark/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin"
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/home/mark/miniforge3/envs/mcam_dev/lib/python3.12/site-packages/cmake/data/share/cmake-4.3/Modules/CMakeDetermineSystem.cmake:212 (message)"
+      - "CMakeLists.txt:16 (project)"
+    message: |
+      The system is: Linux - 7.0.0-22-generic - x86_64
+...

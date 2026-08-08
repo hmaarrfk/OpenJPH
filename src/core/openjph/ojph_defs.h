@@ -42,6 +42,22 @@
 #include <cstdint>
 #include "ojph_version.h"
 
+// This library is the ojph fork of OpenJPH, and is co-installable and
+// co-linkable with upstream OpenJPH: the headers install to include/ojph
+// (upstream uses include/openjph), the library is named ojph (upstream:
+// openjph), and every symbol lives in namespace ojphf (upstream: ojph).
+// The symbol move is performed with the token-level renames below rather
+// than a source-wide edit, which keeps the diff against upstream minimal
+// for future merges; code written against the ojph:: API compiles
+// unchanged when it includes these headers.  Do not include upstream
+// OpenJPH headers and these headers in the same translation unit.
+#ifndef OJPH_FORK_RENAME
+#define OJPH_FORK_RENAME
+#define ojph ojphf
+#define ojph_aligned_malloc ojphf_aligned_malloc
+#define ojph_aligned_free ojphf_aligned_free
+#endif
+
 namespace ojph {
 
 /////////////////////////////////////////////////////////////////////////////

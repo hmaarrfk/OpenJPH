@@ -148,17 +148,17 @@ elseif (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
   endif()
 endif()
 
-add_library(openjph ${SOURCES})
+add_library(ojph ${SOURCES})
 
 ## The option BUILD_SHARED_LIBS
 if (BUILD_SHARED_LIBS AND WIN32)
-  target_compile_definitions(openjph PRIVATE OJPH_BUILD_SHARED_LIBRARY)
+  target_compile_definitions(ojph PRIVATE OJPH_BUILD_SHARED_LIBRARY)
 endif()
 
 ## include library version/name
-set_target_properties(openjph PROPERTIES POSITION_INDEPENDENT_CODE ON)
-target_compile_definitions(openjph PUBLIC _FILE_OFFSET_BITS=64)
-target_include_directories(openjph PUBLIC
+set_target_properties(ojph PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_compile_definitions(ojph PUBLIC _FILE_OFFSET_BITS=64)
+target_include_directories(ojph PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/openjph>
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/shared>
   $<INSTALL_INTERFACE:include>
@@ -172,34 +172,34 @@ if (NOT MSVC)
   include(CheckSymbolExists)
   check_symbol_exists(aligned_alloc "stdlib.h" OJPH_ALIGNED_ALLOC_EXISTS)
   if (OJPH_ALIGNED_ALLOC_EXISTS)
-    target_compile_definitions(openjph PRIVATE OJPH_ALIGNED_ALLOC_EXISTS)
+    target_compile_definitions(ojph PRIVATE OJPH_ALIGNED_ALLOC_EXISTS)
   else()
     check_symbol_exists(posix_memalign "stdlib.h" OJPH_POSIX_MEMALIGN_EXISTS)
     if (OJPH_POSIX_MEMALIGN_EXISTS)
-      target_compile_definitions(openjph PRIVATE OJPH_POSIX_MEMALIGN_EXISTS)
+      target_compile_definitions(ojph PRIVATE OJPH_POSIX_MEMALIGN_EXISTS)
     endif()
   endif()
 endif()
 
 if (MSVC)
-  set(OJPH_LIB_NAME_STRING "openjph.${OPENJPH_VERSION_MAJOR}.${OPENJPH_VERSION_MINOR}")
-  set_target_properties(openjph
+  set(OJPH_LIB_NAME_STRING "ojph.${OPENJPH_VERSION_MAJOR}.${OPENJPH_VERSION_MINOR}")
+  set_target_properties(ojph
     PROPERTIES
-      OUTPUT_NAME "openjph.${OPENJPH_VERSION_MAJOR}.${OPENJPH_VERSION_MINOR}")
+      OUTPUT_NAME "ojph.${OPENJPH_VERSION_MAJOR}.${OPENJPH_VERSION_MINOR}")
 else()
-  set(OJPH_LIB_NAME_STRING "openjph.${OPENJPH_VERSION_MAJOR}.${OPENJPH_VERSION_MINOR}")
-  set_target_properties(openjph
+  set(OJPH_LIB_NAME_STRING "ojph.${OPENJPH_VERSION_MAJOR}.${OPENJPH_VERSION_MINOR}")
+  set_target_properties(ojph
     PROPERTIES
       SOVERSION "${OPENJPH_VERSION_MAJOR}.${OPENJPH_VERSION_MINOR}"
       VERSION "${OPENJPH_VERSION}")
 endif()
 
-install(TARGETS openjph
-  EXPORT openjph-targets
+install(TARGETS ojph
+  EXPORT ojph-targets
 )
 
 install(DIRECTORY openjph/
-  DESTINATION include/openjph
+  DESTINATION include/ojph
   FILES_MATCHING
   PATTERN "*.h"
 )

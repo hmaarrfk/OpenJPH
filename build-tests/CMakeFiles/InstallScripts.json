@@ -1,0 +1,14 @@
+{
+	"InstallScripts" : 
+	[
+		"/home/mark/git/jp2k/OpenJPH/build-tests/cmake_install.cmake",
+		"/home/mark/git/jp2k/OpenJPH/build-tests/src/core/cmake_install.cmake",
+		"/home/mark/git/jp2k/OpenJPH/build-tests/src/apps/cmake_install.cmake",
+		"/home/mark/git/jp2k/OpenJPH/build-tests/src/apps/ojph_expand/cmake_install.cmake",
+		"/home/mark/git/jp2k/OpenJPH/build-tests/src/apps/ojph_compress/cmake_install.cmake",
+		"/home/mark/git/jp2k/OpenJPH/build-tests/tests/cmake_install.cmake",
+		"/home/mark/git/jp2k/OpenJPH/build-tests/_deps/googletest-build/cmake_install.cmake",
+		"/home/mark/git/jp2k/OpenJPH/build-tests/_deps/googletest-build/googletest/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

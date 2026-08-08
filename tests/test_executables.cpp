@@ -99,8 +99,8 @@ int execute(const std::string& cmd, std::string& result)
 #define REF_FILE_DIR ".\\jp2k_test_codestreams\\openjph\\references\\"
 #define MSE_PAE_PATH  ".\\mse_pae"
 #define COMPARE_FILES_PATH  ".\\compare_files"
-#define EXPAND_EXECUTABLE ".\\ojph_expand.exe"
-#define COMPRESS_EXECUTABLE ".\\ojph_compress.exe"
+#define EXPAND_EXECUTABLE ".\\ojphf_expand.exe"
+#define COMPRESS_EXECUTABLE ".\\ojphf_compress.exe"
 #else
 #define SRC_FILE_DIR "./jp2k_test_codestreams/openjph/"
 #define OUT_FILE_DIR "./"
@@ -120,8 +120,8 @@ int execute(const std::string& cmd, std::string& result)
 //    'make clean && make' after every change in code.
 // 3. cd to tests, and run test_executables_simd or test_executables_no_simd.
 
-#define EXPAND_EXECUTABLE "./ojph_expand"
-#define COMPRESS_EXECUTABLE "./ojph_compress"
+#define EXPAND_EXECUTABLE "./ojphf_expand"
+#define COMPRESS_EXECUTABLE "./ojphf_compress"
 //#define EXPAND_EXECUTABLE "20.18.0_64bit/bin/node ./ojph_expand.js"
 //#define COMPRESS_EXECUTABLE "20.18.0_64bit/bin/node ./ojph_compress.js"
 //#define EXPAND_EXECUTABLE "node-v18.7.0-linux-x64/bin/node ./ojph_expand_simd.js"

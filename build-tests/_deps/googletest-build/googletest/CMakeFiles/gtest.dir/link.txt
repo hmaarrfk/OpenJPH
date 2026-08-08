@@ -1,0 +1,2 @@
+/home/mark/miniforge3/envs/mcam_dev/bin/x86_64-conda-linux-gnu-ar qc ../../../lib/libgtest.a "CMakeFiles/gtest.dir/src/gtest-all.cc.o"
+/home/mark/miniforge3/envs/mcam_dev/bin/x86_64-conda-linux-gnu-ranlib ../../../lib/libgtest.a

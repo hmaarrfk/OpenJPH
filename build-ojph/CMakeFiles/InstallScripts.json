@@ -1,0 +1,11 @@
+{
+	"InstallScripts" : 
+	[
+		"/home/mark/git/jp2k/OpenJPH/build-ojph/cmake_install.cmake",
+		"/home/mark/git/jp2k/OpenJPH/build-ojph/src/core/cmake_install.cmake",
+		"/home/mark/git/jp2k/OpenJPH/build-ojph/src/apps/cmake_install.cmake",
+		"/home/mark/git/jp2k/OpenJPH/build-ojph/src/apps/ojph_expand/cmake_install.cmake",
+		"/home/mark/git/jp2k/OpenJPH/build-ojph/src/apps/ojph_compress/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"/home/mark/git/jp2k/OpenJPH/build-ojph-tests/_deps/jp2k_test_codestreams-subbuild/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

@@ -1,0 +1,12 @@
+# This is a generated file and its contents are an internal implementation detail.
+# The download step will be re-executed if anything in this file changes.
+# No other meaning or use of this file is supported.
+
+method=url
+command=/home/mark/miniforge3/envs/mcam_dev/lib/python3.12/site-packages/cmake/data/bin/cmake;-DCMAKE_MESSAGE_LOG_LEVEL=VERBOSE;-P;/home/mark/git/jp2k/OpenJPH/build-tests/_deps/jp2k_test_codestreams-subbuild/jp2k_test_codestreams-populate-prefix/src/jp2k_test_codestreams-populate-stamp/download-jp2k_test_codestreams-populate.cmake;COMMAND;/home/mark/miniforge3/envs/mcam_dev/lib/python3.12/site-packages/cmake/data/bin/cmake;-DCMAKE_MESSAGE_LOG_LEVEL=VERBOSE;-P;/home/mark/git/jp2k/OpenJPH/build-tests/_deps/jp2k_test_codestreams-subbuild/jp2k_test_codestreams-populate-prefix/src/jp2k_test_codestreams-populate-stamp/verify-jp2k_test_codestreams-populate.cmake;COMMAND;/home/mark/miniforge3/envs/mcam_dev/lib/python3.12/site-packages/cmake/data/bin/cmake;-DCMAKE_MESSAGE_LOG_LEVEL=VERBOSE;-P;/home/mark/git/jp2k/OpenJPH/build-tests/_deps/jp2k_test_codestreams-subbuild/jp2k_test_codestreams-populate-prefix/src/jp2k_test_codestreams-populate-stamp/extract-jp2k_test_codestreams-populate.cmake
+source_dir=/home/mark/git/jp2k/OpenJPH/build-tests/tests/jp2k_test_codestreams
+work_dir=/home/mark/git/jp2k/OpenJPH/build-tests/tests
+url(s)=https://github.com/aous72/jp2k_test_codestreams/archive/refs/heads/main.zip
+hash=
+      no_extract=
+

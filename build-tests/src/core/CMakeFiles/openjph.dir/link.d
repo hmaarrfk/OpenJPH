@@ -1,0 +1,196 @@
+libopenjph.so.0.30.1: \
+  /home/mark/miniforge3/envs/mcam_dev/bin/../x86_64-conda-linux-gnu/sysroot/lib/../lib/crti.o \
+  /home/mark/miniforge3/envs/mcam_dev/bin/../lib/gcc/x86_64-conda-linux-gnu/14.3.0/crtbeginS.o \
+  CMakeFiles/openjph.dir/codestream/ojph_codeblock.cpp.o \
+  CMakeFiles/openjph.dir/codestream/ojph_codeblock_fun.cpp.o \
+  CMakeFiles/openjph.dir/codestream/ojph_codestream.cpp.o \
+  CMakeFiles/openjph.dir/codestream/ojph_codestream_gen.cpp.o \
+  CMakeFiles/openjph.dir/codestream/ojph_codestream_local.cpp.o \
+  CMakeFiles/openjph.dir/codestream/ojph_params.cpp.o \
+  CMakeFiles/openjph.dir/codestream/ojph_precinct.cpp.o \
+  CMakeFiles/openjph.dir/codestream/ojph_resolution.cpp.o \
+  CMakeFiles/openjph.dir/codestream/ojph_subband.cpp.o \
+  CMakeFiles/openjph.dir/codestream/ojph_tile.cpp.o \
+  CMakeFiles/openjph.dir/codestream/ojph_tile_comp.cpp.o \
+  CMakeFiles/openjph.dir/coding/ojph_block_common.cpp.o \
+  CMakeFiles/openjph.dir/coding/ojph_block_decoder32.cpp.o \
+  CMakeFiles/openjph.dir/coding/ojph_block_decoder64.cpp.o \
+  CMakeFiles/openjph.dir/coding/ojph_block_encoder.cpp.o \
+  CMakeFiles/openjph.dir/others/ojph_arch.cpp.o \
+  CMakeFiles/openjph.dir/others/ojph_file.cpp.o \
+  CMakeFiles/openjph.dir/others/ojph_mem.cpp.o \
+  CMakeFiles/openjph.dir/others/ojph_mem_c.c.o \
+  CMakeFiles/openjph.dir/others/ojph_message.cpp.o \
+  CMakeFiles/openjph.dir/transform/ojph_colour.cpp.o \
+  CMakeFiles/openjph.dir/transform/ojph_transform.cpp.o \
+  CMakeFiles/openjph.dir/codestream/ojph_codestream_sse.cpp.o \
+  CMakeFiles/openjph.dir/transform/ojph_colour_sse.cpp.o \
+  CMakeFiles/openjph.dir/transform/ojph_transform_sse.cpp.o \
+  CMakeFiles/openjph.dir/codestream/ojph_codestream_sse2.cpp.o \
+  CMakeFiles/openjph.dir/transform/ojph_colour_sse2.cpp.o \
+  CMakeFiles/openjph.dir/transform/ojph_transform_sse2.cpp.o \
+  CMakeFiles/openjph.dir/coding/ojph_block_decoder_ssse3.cpp.o \
+  CMakeFiles/openjph.dir/codestream/ojph_codestream_avx.cpp.o \
+  CMakeFiles/openjph.dir/transform/ojph_colour_avx.cpp.o \
+  CMakeFiles/openjph.dir/transform/ojph_transform_avx.cpp.o \
+  CMakeFiles/openjph.dir/codestream/ojph_codestream_avx2.cpp.o \
+  CMakeFiles/openjph.dir/transform/ojph_colour_avx2.cpp.o \
+  CMakeFiles/openjph.dir/transform/ojph_transform_avx2.cpp.o \
+  CMakeFiles/openjph.dir/coding/ojph_block_decoder_avx2.cpp.o \
+  CMakeFiles/openjph.dir/coding/ojph_block_encoder_avx2.cpp.o \
+  CMakeFiles/openjph.dir/coding/ojph_block_encoder_avx512.cpp.o \
+  CMakeFiles/openjph.dir/transform/ojph_transform_avx512.cpp.o \
+  /home/mark/miniforge3/envs/mcam_dev/lib/libstdc++.so \
+  /home/mark/miniforge3/envs/mcam_dev/bin/../x86_64-conda-linux-gnu/sysroot/lib/../lib/libm.so \
+  /home/mark/miniforge3/envs/mcam_dev/bin/../x86_64-conda-linux-gnu/sysroot/lib/../lib/libm.so \
+  /home/mark/miniforge3/envs/mcam_dev/bin/../x86_64-conda-linux-gnu/sysroot/lib/../lib/libm.so \
+  /home/mark/miniforge3/envs/mcam_dev/bin/../x86_64-conda-linux-gnu/sysroot/lib64/libm.so.6 \
+  /home/mark/miniforge3/envs/mcam_dev/bin/../x86_64-conda-linux-gnu/sysroot/lib64/libmvec.so.1 \
+  /home/mark/miniforge3/envs/mcam_dev/lib/libgcc_s.so \
+  /home/mark/miniforge3/envs/mcam_dev/lib/libgcc_s.so \
+  /home/mark/miniforge3/envs/mcam_dev/lib/libgcc_s.so \
+  /home/mark/miniforge3/envs/mcam_dev/lib/libgcc_s.so.1 \
+  /home/mark/miniforge3/envs/mcam_dev/bin/../lib/gcc/x86_64-conda-linux-gnu/14.3.0/libgcc.a \
+  /home/mark/miniforge3/envs/mcam_dev/bin/../x86_64-conda-linux-gnu/sysroot/lib/../lib/libc.so \
+  /home/mark/miniforge3/envs/mcam_dev/bin/../x86_64-conda-linux-gnu/sysroot/lib/../lib/libc.so \
+  /home/mark/miniforge3/envs/mcam_dev/bin/../x86_64-conda-linux-gnu/sysroot/lib/../lib/libc.so \
+  /home/mark/miniforge3/envs/mcam_dev/bin/../x86_64-conda-linux-gnu/sysroot/lib64/libc.so.6 \
+  /home/mark/miniforge3/envs/mcam_dev/bin/../x86_64-conda-linux-gnu/sysroot/usr/lib64/libc_nonshared.a \
+  /home/mark/miniforge3/envs/mcam_dev/bin/../x86_64-conda-linux-gnu/sysroot/lib64/ld-linux-x86-64.so.2 \
+  /home/mark/miniforge3/envs/mcam_dev/lib/libgcc_s.so \
+  /home/mark/miniforge3/envs/mcam_dev/lib/libgcc_s.so \
+  /home/mark/miniforge3/envs/mcam_dev/lib/libgcc_s.so \
+  /home/mark/miniforge3/envs/mcam_dev/lib/libgcc_s.so.1 \
+  /home/mark/miniforge3/envs/mcam_dev/bin/../lib/gcc/x86_64-conda-linux-gnu/14.3.0/libgcc.a \
+  /home/mark/miniforge3/envs/mcam_dev/bin/../lib/gcc/x86_64-conda-linux-gnu/14.3.0/crtendS.o \
+  /home/mark/miniforge3/envs/mcam_dev/bin/../x86_64-conda-linux-gnu/sysroot/lib/../lib/crtn.o
+
+/home/mark/miniforge3/envs/mcam_dev/bin/../x86_64-conda-linux-gnu/sysroot/lib/../lib/crti.o:
+
+/home/mark/miniforge3/envs/mcam_dev/bin/../lib/gcc/x86_64-conda-linux-gnu/14.3.0/crtbeginS.o:
+
+CMakeFiles/openjph.dir/codestream/ojph_codeblock.cpp.o:
+
+CMakeFiles/openjph.dir/codestream/ojph_codeblock_fun.cpp.o:
+
+CMakeFiles/openjph.dir/codestream/ojph_codestream.cpp.o:
+
+CMakeFiles/openjph.dir/codestream/ojph_codestream_gen.cpp.o:
+
+CMakeFiles/openjph.dir/codestream/ojph_codestream_local.cpp.o:
+
+CMakeFiles/openjph.dir/codestream/ojph_params.cpp.o:
+
+CMakeFiles/openjph.dir/codestream/ojph_precinct.cpp.o:
+
+CMakeFiles/openjph.dir/codestream/ojph_resolution.cpp.o:
+
+CMakeFiles/openjph.dir/codestream/ojph_subband.cpp.o:
+
+CMakeFiles/openjph.dir/codestream/ojph_tile.cpp.o:
+
+CMakeFiles/openjph.dir/codestream/ojph_tile_comp.cpp.o:
+
+CMakeFiles/openjph.dir/coding/ojph_block_common.cpp.o:
+
+CMakeFiles/openjph.dir/coding/ojph_block_decoder32.cpp.o:
+
+CMakeFiles/openjph.dir/coding/ojph_block_decoder64.cpp.o:
+
+CMakeFiles/openjph.dir/coding/ojph_block_encoder.cpp.o:
+
+CMakeFiles/openjph.dir/others/ojph_arch.cpp.o:
+
+CMakeFiles/openjph.dir/others/ojph_file.cpp.o:
+
+CMakeFiles/openjph.dir/others/ojph_mem.cpp.o:
+
+CMakeFiles/openjph.dir/others/ojph_mem_c.c.o:
+
+CMakeFiles/openjph.dir/others/ojph_message.cpp.o:
+
+CMakeFiles/openjph.dir/transform/ojph_colour.cpp.o:
+
+CMakeFiles/openjph.dir/transform/ojph_transform.cpp.o:
+
+CMakeFiles/openjph.dir/codestream/ojph_codestream_sse.cpp.o:
+
+CMakeFiles/openjph.dir/transform/ojph_colour_sse.cpp.o:
+
+CMakeFiles/openjph.dir/transform/ojph_transform_sse.cpp.o:
+
+CMakeFiles/openjph.dir/codestream/ojph_codestream_sse2.cpp.o:
+
+CMakeFiles/openjph.dir/transform/ojph_colour_sse2.cpp.o:
+
+CMakeFiles/openjph.dir/transform/ojph_transform_sse2.cpp.o:
+
+CMakeFiles/openjph.dir/coding/ojph_block_decoder_ssse3.cpp.o:
+
+CMakeFiles/openjph.dir/codestream/ojph_codestream_avx.cpp.o:
+
+CMakeFiles/openjph.dir/transform/ojph_colour_avx.cpp.o:
+
+CMakeFiles/openjph.dir/transform/ojph_transform_avx.cpp.o:
+
+CMakeFiles/openjph.dir/codestream/ojph_codestream_avx2.cpp.o:
+
+CMakeFiles/openjph.dir/transform/ojph_colour_avx2.cpp.o:
+
+CMakeFiles/openjph.dir/transform/ojph_transform_avx2.cpp.o:
+
+CMakeFiles/openjph.dir/coding/ojph_block_decoder_avx2.cpp.o:
+
+CMakeFiles/openjph.dir/coding/ojph_block_encoder_avx2.cpp.o:
+
+CMakeFiles/openjph.dir/coding/ojph_block_encoder_avx512.cpp.o:
+
+CMakeFiles/openjph.dir/transform/ojph_transform_avx512.cpp.o:
+
+/home/mark/miniforge3/envs/mcam_dev/lib/libstdc++.so:
+
+/home/mark/miniforge3/envs/mcam_dev/bin/../x86_64-conda-linux-gnu/sysroot/lib/../lib/libm.so:
+
+/home/mark/miniforge3/envs/mcam_dev/bin/../x86_64-conda-linux-gnu/sysroot/lib/../lib/libm.so:
+
+/home/mark/miniforge3/envs/mcam_dev/bin/../x86_64-conda-linux-gnu/sysroot/lib/../lib/libm.so:
+
+/home/mark/miniforge3/envs/mcam_dev/bin/../x86_64-conda-linux-gnu/sysroot/lib64/libm.so.6:
+
+/home/mark/miniforge3/envs/mcam_dev/bin/../x86_64-conda-linux-gnu/sysroot/lib64/libmvec.so.1:
+
+/home/mark/miniforge3/envs/mcam_dev/lib/libgcc_s.so:
+
+/home/mark/miniforge3/envs/mcam_dev/lib/libgcc_s.so:
+
+/home/mark/miniforge3/envs/mcam_dev/lib/libgcc_s.so:
+
+/home/mark/miniforge3/envs/mcam_dev/lib/libgcc_s.so.1:
+
+/home/mark/miniforge3/envs/mcam_dev/bin/../lib/gcc/x86_64-conda-linux-gnu/14.3.0/libgcc.a:
+
+/home/mark/miniforge3/envs/mcam_dev/bin/../x86_64-conda-linux-gnu/sysroot/lib/../lib/libc.so:
+
+/home/mark/miniforge3/envs/mcam_dev/bin/../x86_64-conda-linux-gnu/sysroot/lib/../lib/libc.so:
+
+/home/mark/miniforge3/envs/mcam_dev/bin/../x86_64-conda-linux-gnu/sysroot/lib/../lib/libc.so:
+
+/home/mark/miniforge3/envs/mcam_dev/bin/../x86_64-conda-linux-gnu/sysroot/lib64/libc.so.6:
+
+/home/mark/miniforge3/envs/mcam_dev/bin/../x86_64-conda-linux-gnu/sysroot/usr/lib64/libc_nonshared.a:
+
+/home/mark/miniforge3/envs/mcam_dev/bin/../x86_64-conda-linux-gnu/sysroot/lib64/ld-linux-x86-64.so.2:
+
+/home/mark/miniforge3/envs/mcam_dev/lib/libgcc_s.so:
+
+/home/mark/miniforge3/envs/mcam_dev/lib/libgcc_s.so:
+
+/home/mark/miniforge3/envs/mcam_dev/lib/libgcc_s.so:
+
+/home/mark/miniforge3/envs/mcam_dev/lib/libgcc_s.so.1:
+
+/home/mark/miniforge3/envs/mcam_dev/bin/../lib/gcc/x86_64-conda-linux-gnu/14.3.0/libgcc.a:
+
+/home/mark/miniforge3/envs/mcam_dev/bin/../lib/gcc/x86_64-conda-linux-gnu/14.3.0/crtendS.o:
+
+/home/mark/miniforge3/envs/mcam_dev/bin/../x86_64-conda-linux-gnu/sysroot/lib/../lib/crtn.o:

@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/home/mark/git/jp2k/OpenJPH/build-tests/_deps/jp2k_test_codestreams-subbuild/CMakeFiles/jp2k_test_codestreams-populate"
+		},
+		{
+			"file" : "/home/mark/git/jp2k/OpenJPH/build-tests/_deps/jp2k_test_codestreams-subbuild/CMakeFiles/jp2k_test_codestreams-populate.rule"
+		},
+		{
+			"file" : "/home/mark/git/jp2k/OpenJPH/build-tests/_deps/jp2k_test_codestreams-subbuild/CMakeFiles/jp2k_test_codestreams-populate-complete.rule"
+		},
+		{
+			"file" : "/home/mark/git/jp2k/OpenJPH/build-tests/_deps/jp2k_test_codestreams-subbuild/jp2k_test_codestreams-populate-prefix/src/jp2k_test_codestreams-populate-stamp/jp2k_test_codestreams-populate-build.rule"
+		},
+		{
+			"file" : "/home/mark/git/jp2k/OpenJPH/build-tests/_deps/jp2k_test_codestreams-subbuild/jp2k_test_codestreams-populate-prefix/src/jp2k_test_codestreams-populate-stamp/jp2k_test_codestreams-populate-configure.rule"
+		},
+		{
+			"file" : "/home/mark/git/jp2k/OpenJPH/build-tests/_deps/jp2k_test_codestreams-subbuild/jp2k_test_codestreams-populate-prefix/src/jp2k_test_codestreams-populate-stamp/jp2k_test_codestreams-populate-download.rule"
+		},
+		{
+			"file" : "/home/mark/git/jp2k/OpenJPH/build-tests/_deps/jp2k_test_codestreams-subbuild/jp2k_test_codestreams-populate-prefix/src/jp2k_test_codestreams-populate-stamp/jp2k_test_codestreams-populate-install.rule"
+		},
+		{
+			"file" : "/home/mark/git/jp2k/OpenJPH/build-tests/_deps/jp2k_test_codestreams-subbuild/jp2k_test_codestreams-populate-prefix/src/jp2k_test_codestreams-populate-stamp/jp2k_test_codestreams-populate-mkdir.rule"
+		},
+		{
+			"file" : "/home/mark/git/jp2k/OpenJPH/build-tests/_deps/jp2k_test_codestreams-subbuild/jp2k_test_codestreams-populate-prefix/src/jp2k_test_codestreams-populate-stamp/jp2k_test_codestreams-populate-patch.rule"
+		},
+		{
+			"file" : "/home/mark/git/jp2k/OpenJPH/build-tests/_deps/jp2k_test_codestreams-subbuild/jp2k_test_codestreams-populate-prefix/src/jp2k_test_codestreams-populate-stamp/jp2k_test_codestreams-populate-test.rule"
+		},
+		{
+			"file" : "/home/mark/git/jp2k/OpenJPH/build-tests/_deps/jp2k_test_codestreams-subbuild/jp2k_test_codestreams-populate-prefix/src/jp2k_test_codestreams-populate-stamp/jp2k_test_codestreams-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"jp2k_test_codestreams-populate"
+		],
+		"name" : "jp2k_test_codestreams-populate"
+	}
+}

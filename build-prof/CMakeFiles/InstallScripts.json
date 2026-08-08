@@ -1,0 +1,8 @@
+{
+	"InstallScripts" : 
+	[
+		"/home/mark/git/jp2k/OpenJPH/build-prof/cmake_install.cmake",
+		"/home/mark/git/jp2k/OpenJPH/build-prof/src/core/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

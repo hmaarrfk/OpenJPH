@@ -1,0 +1,10 @@
+prefix=/usr/local
+libdir=${prefix}/lib
+includedir=${prefix}/include
+
+Name: ojph
+Description: ojph, a fork of OpenJPH, co-installable with it
+Version: 0.30.1
+Requires: 
+Libs: -L${libdir} -lojph
+Cflags: -I${includedir} -D_FILE_OFFSET_BITS=64

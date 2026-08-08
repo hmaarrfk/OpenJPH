@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.12.0)
 include(ojph_version.cmake)
 
 ## project
-project (openjph VERSION ${OPENJPH_VERSION} DESCRIPTION "Open source implementation of JPH" LANGUAGES C CXX)
+project (ojph VERSION ${OPENJPH_VERSION} DESCRIPTION "ojph, a fork of OpenJPH, co-installable with it" LANGUAGES C CXX)
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 
 ################################################################################################
@@ -192,23 +192,23 @@ endif()
 # Install
 ################################################################################################
 
-install(EXPORT openjph-targets
-  DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/openjph
+install(EXPORT ojph-targets
+  DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ojph
 )
 
 include(CMakePackageConfigHelpers)
 
-configure_package_config_file(${CMAKE_CURRENT_SOURCE_DIR}/src/openjph-config.cmake.in
-  "${CMAKE_CURRENT_BINARY_DIR}/openjph-config.cmake"
-  INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/openjph
+configure_package_config_file(${CMAKE_CURRENT_SOURCE_DIR}/src/ojph-config.cmake.in
+  "${CMAKE_CURRENT_BINARY_DIR}/ojph-config.cmake"
+  INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ojph
 )
 
-write_basic_package_version_file(${CMAKE_CURRENT_BINARY_DIR}/openjph-config-version.cmake
+write_basic_package_version_file(${CMAKE_CURRENT_BINARY_DIR}/ojph-config-version.cmake
                                  COMPATIBILITY SameMinorVersion)
 
-install(FILES ${CMAKE_CURRENT_BINARY_DIR}/openjph-config.cmake
-              ${CMAKE_CURRENT_BINARY_DIR}/openjph-config-version.cmake
-  DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/openjph
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/ojph-config.cmake
+              ${CMAKE_CURRENT_BINARY_DIR}/ojph-config-version.cmake
+  DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ojph
 )
 
 if(IS_ABSOLUTE "${CMAKE_INSTALL_INCLUDEDIR}")
@@ -224,7 +224,7 @@ else()
 endif()
 
 configure_file(
-  "${CMAKE_CURRENT_SOURCE_DIR}/src/openjph.pc.in"
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/ojph.pc.in"
   "${CMAKE_BINARY_DIR}/${PROJECT_NAME}.pc"
   @ONLY
 )
