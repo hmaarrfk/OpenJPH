@@ -17,7 +17,7 @@ source_group("common"      FILES ${OJPH_SOCKETS_H} ${OJPH_THREADS_H})
 
 add_executable(ojph_stream_expand ${SOURCES})
 target_include_directories(ojph_stream_expand PRIVATE ../common)
-target_link_libraries(ojph_stream_expand PRIVATE openjph Threads::Threads)
+target_link_libraries(ojph_stream_expand PRIVATE ojph Threads::Threads)
 if(WIN32)
     target_link_libraries(ojph_stream_expand PRIVATE ws2_32)
 endif()

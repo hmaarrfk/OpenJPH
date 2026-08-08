@@ -48,7 +48,7 @@ add_executable(
 
 target_link_libraries(
   test_mixed_coc
-  openjph
+  ojph
   GTest::gtest_main
 )
 
@@ -60,7 +60,7 @@ add_executable(
 
 target_link_libraries(
   test_rev13
-  openjph
+  ojph
   GTest::gtest_main
 )
 
@@ -72,7 +72,7 @@ add_executable(
 
 target_link_libraries(
   test_rev12
-  openjph
+  ojph
   GTest::gtest_main
 )
 
@@ -88,7 +88,7 @@ if (MSVC)
     COMMAND ${CMAKE_COMMAND} -E copy "../bin/\$(Configuration)/gtest_main.dll" "./"
     COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:ojph_compress>" "./"
     COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:ojph_expand>" "./"
-    COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:openjph>" "./"
+    COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:ojph>" "./"
   )
   add_custom_command(TARGET compare_files POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy "./\$(Configuration)/compare_files.exe" "./"
@@ -117,7 +117,7 @@ else()
     add_custom_command(TARGET test_executables POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E copy "../bin/${CMAKE_SHARED_LIBRARY_PREFIX}gtest.dll" "./"
       COMMAND ${CMAKE_COMMAND} -E copy "../bin/${CMAKE_SHARED_LIBRARY_PREFIX}gtest_main.dll" "./"
-      COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:openjph>" "./"
+      COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:ojph>" "./"
     )
   endif()
 endif(MSVC)

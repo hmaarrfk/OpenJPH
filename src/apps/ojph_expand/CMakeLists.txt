@@ -53,6 +53,7 @@ endif()
 
 add_executable(ojph_expand ${SOURCES})
 target_include_directories(ojph_expand PRIVATE ../common)
-target_link_libraries(ojph_expand PRIVATE openjph $<TARGET_NAME_IF_EXISTS:TIFF::TIFF>)
+target_link_libraries(ojph_expand PRIVATE ojph $<TARGET_NAME_IF_EXISTS:TIFF::TIFF>)
 
+set_target_properties(ojph_expand PROPERTIES OUTPUT_NAME ojphf_expand)
 install(TARGETS ojph_expand)
