@@ -1,5 +1,6 @@
 
 file(GLOB CODESTREAM       "codestream/*.cpp" "codestream/*.h")
+file(GLOB CODESTREAM_HWY   "codestream/*_hwy.cpp")
 file(GLOB CODESTREAM_SSE   "codestream/*_sse.cpp")
 file(GLOB CODESTREAM_SSE2  "codestream/*_sse2.cpp")
 file(GLOB CODESTREAM_AVX   "codestream/*_avx.cpp")
@@ -23,7 +24,7 @@ file(GLOB TRANSFORM_AVX512 "transform/*_avx512.cpp")
 file(GLOB TRANSFORM_WASM   "transform/*_wasm.cpp")
 file(GLOB TRANSFORM_VSX    "transform/*_vsx.cpp")
 
-list(REMOVE_ITEM CODESTREAM ${CODESTREAM_SSE} ${CODESTREAM_SSE2} ${CODESTREAM_AVX} ${CODESTREAM_AVX2} ${CODESTREAM_WASM} ${CODESTREAM_VSX})
+list(REMOVE_ITEM CODESTREAM ${CODESTREAM_HWY} ${CODESTREAM_SSE} ${CODESTREAM_SSE2} ${CODESTREAM_AVX} ${CODESTREAM_AVX2} ${CODESTREAM_WASM} ${CODESTREAM_VSX})
 list(REMOVE_ITEM CODING ${CODING_SSSE3} ${CODING_WASM} ${CODING_AVX2} ${CODING_AVX512} ${CODING_VSX})
 list(REMOVE_ITEM TRANSFORM ${TRANSFORM_SSE} ${TRANSFORM_SSE2} ${TRANSFORM_AVX} ${TRANSFORM_AVX2} ${TRANSFORM_AVX512} ${TRANSFORM_WASM} ${TRANSFORM_VSX})
 list(APPEND SOURCES ${CODESTREAM} ${CODING} ${COMMON} ${OTHERS} ${TRANSFORM})
@@ -77,6 +78,25 @@ else()
         source_group("coding" FILES ${CODING_AVX512})
         source_group("transform" FILES ${TRANSFORM_AVX512})
       endif()
+      if (OJPH_ENABLE_HWY AND NOT OJPH_DISABLE_AVX2)
+        # Google Highway (hwy) decode kernels; header-only usage with a
+        # statically selected target (AVX2), gated at run time in
+        # ojph_codeblock_fun.cpp and ojph_tile.cpp
+        if (NOT OJPH_HWY_INCLUDE_DIR)
+          find_path(OJPH_HWY_INCLUDE_DIR hwy/highway.h
+                    HINTS ENV CONDA_PREFIX PATH_SUFFIXES include)
+        endif()
+        if (OJPH_HWY_INCLUDE_DIR)
+          message(STATUS "hwy headers found in ${OJPH_HWY_INCLUDE_DIR}; "
+                         "enabling hwy decode kernels")
+          set(OJPH_HWY_ENABLED TRUE)
+          list(APPEND SOURCES ${CODESTREAM_HWY})
+          source_group("codestream" FILES ${CODESTREAM_HWY})
+        else()
+          message(STATUS "hwy headers not found; hwy decode kernels are "
+                         "disabled (set OJPH_HWY_INCLUDE_DIR to enable)")
+        endif()
+      endif()
 
       # Set compilation flags
       if (MSVC)
@@ -108,6 +128,15 @@ else()
         set_source_files_properties(transform/ojph_transform_avx.cpp PROPERTIES COMPILE_FLAGS -mavx)
         set_source_files_properties(transform/ojph_transform_avx2.cpp PROPERTIES COMPILE_FLAGS -mavx2)
         set_source_files_properties(transform/ojph_transform_avx512.cpp PROPERTIES COMPILE_FLAGS "-mavx512f -mavx512cd")
+      endif()
+      if (OJPH_HWY_ENABLED)
+        # hwy's AVX2 baseline needs SSE4/AES/PCLMUL/BMI2/FMA/F16C as well;
+        # every CPU that reports AVX2 also has these
+        if (MSVC)
+          set_source_files_properties(codestream/ojph_codestream_hwy.cpp PROPERTIES COMPILE_FLAGS "/arch:AVX2")
+        else()
+          set_source_files_properties(codestream/ojph_codestream_hwy.cpp PROPERTIES COMPILE_FLAGS "-mavx2 -maes -mpclmul -mbmi -mbmi2 -mfma -mf16c")
+        endif()
       endif()
     endif()
 
@@ -153,6 +182,12 @@ add_library(ojph ${SOURCES})
 ## The option BUILD_SHARED_LIBS
 if (BUILD_SHARED_LIBS AND WIN32)
   target_compile_definitions(ojph PRIVATE OJPH_BUILD_SHARED_LIBRARY)
+endif()
+
+## Google Highway (hwy) decode kernels
+if (OJPH_HWY_ENABLED)
+  target_compile_definitions(ojph PRIVATE OJPH_ENABLE_HWY)
+  target_include_directories(ojph PRIVATE ${OJPH_HWY_INCLUDE_DIR})
 endif()
 
 ## include library version/name

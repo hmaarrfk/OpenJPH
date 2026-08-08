@@ -53,6 +53,10 @@ option(OJPH_DISABLE_AVX2 "Disables the use of AVX2 SIMD instructions and associa
 option(OJPH_DISABLE_AVX512 "Disables the use of AVX512 SIMD instructions and associated files" OFF)
 option(OJPH_DISABLE_NEON "Disables the use of NEON SIMD instructions and associated files" OFF)
 
+if (NOT DEFINED OJPH_ENABLE_HWY)
+  option(OJPH_ENABLE_HWY "Enables Google Highway (hwy) SIMD kernels when the hwy headers are found" ON)
+endif()
+
 ## options that are being deprecated
 if (DEFINED OJPH_DISABLE_INTEL_SIMD)
   message(STATUS "OJPH_DISABLE_INTEL_SIMD is being deprecated. Instead, use \"OJPH_DISABLE_SIMD\", "

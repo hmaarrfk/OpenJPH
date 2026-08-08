@@ -147,19 +147,6 @@ namespace ojph {
     }
 
     //////////////////////////////////////////////////////////////////////////
-    static void rev_tx_from_cb16(const ui32 *sp, si16 *dp, ui32 K_max,
-                                 ui32 count)
-    {
-      ui32 shift = 31 - K_max;
-      for (ui32 i = count; i > 0; --i)
-      {
-        ui32 v = *sp++;
-        si32 val = (si32)((v & 0x7FFFFFFFU) >> shift);
-        *dp++ = (si16)((v & 0x80000000U) ? -val : val);
-      }
-    }
-
-    //////////////////////////////////////////////////////////////////////////
     void codeblock::push(line_buf *line)
     {
       // Most codeblocks of mask-like or smooth images are entirely zero;
@@ -329,7 +316,7 @@ namespace ojph {
           if (!zero_block)
           {
             const ui32 *sp = buf32 + cur_line * stride;
-            rev_tx_from_cb16(sp, dp, K_max, cb_size.w);
+            this->codeblock_functions.tx_from_cb16(sp, dp, K_max, cb_size.w);
           }
           else
             memset(dp, 0, (size_t)cb_size.w * sizeof(si16));

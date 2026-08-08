@@ -63,6 +63,9 @@ namespace ojph {
                                    float delta_inv, ui32 count, ui64* max_val);
 
     // define line transfer function signature from codeblock to subband
+    typedef void (*tx_from_cb_fun16)(const ui32 *sp, si16 *dp, ui32 K_max,
+                                     ui32 count);
+
     typedef void (*tx_from_cb_fun32)(const ui32 *sp, void *dp, ui32 K_max,
                                      float delta, ui32 count);
 
@@ -106,6 +109,7 @@ namespace ojph {
       tx_to_cb_fun64 tx_to_cb64;
      
       // a pointer to function transferring samples from codeblocks to subbands
+      tx_from_cb_fun16 tx_from_cb16; // 16-bit lines fed from 32-bit blocks
       tx_from_cb_fun32 tx_from_cb32;
       tx_from_cb_fun64 tx_from_cb64;
      

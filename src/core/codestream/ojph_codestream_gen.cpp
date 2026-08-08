@@ -121,6 +121,22 @@ namespace ojph {
     }
 
     //////////////////////////////////////////////////////////////////////////
+    // transfer samples from a 32-bit codeblock to a 16-bit line, converting
+    // from sign and magnitude; equivalent to gen_rev_tx_from_cb32 with a
+    // 16-bit line
+    void gen_rev_tx_from_cb16(const ui32 *sp, si16 *dp, ui32 K_max,
+                              ui32 count)
+    {
+      ui32 shift = 31 - K_max;
+      for (ui32 i = count; i > 0; --i)
+      {
+        ui32 v = *sp++;
+        si32 val = (si32)((v & 0x7FFFFFFFU) >> shift);
+        *dp++ = (si16)((v & 0x80000000U) ? -val : val);
+      }
+    }
+
+    //////////////////////////////////////////////////////////////////////////
     void gen_rev_tx_from_cb32(const ui32 *sp, void *dp, ui32 K_max,
                               float delta, ui32 count)
     {
