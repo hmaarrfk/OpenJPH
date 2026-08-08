@@ -99,6 +99,21 @@ namespace ojph {
                           const line_buf* lsrc, const line_buf* hsrc,
                           ui32 width, bool even);
 
+    /////////////////////////////////////////////////////////////////////////
+    void gen_rev_vert_step_one_tap(const lifting_step* s,
+                                   const line_buf* src, const line_buf* aug,
+                                   ui32 repeat, bool synthesis);
+
+    /////////////////////////////////////////////////////////////////////////
+    void gen_rev_horz_ana_arb(const param_atk* atk, const line_buf* ldst,
+                              const line_buf* hdst, const line_buf* src,
+                              ui32 width, bool even);
+
+    /////////////////////////////////////////////////////////////////////////
+    void gen_rev_horz_syn_arb(const param_atk* atk, const line_buf* dst,
+                              const line_buf* lsrc, const line_buf* hsrc,
+                              ui32 width, bool even);
+
     //////////////////////////////////////////////////////////////////////////
     //
     //
