@@ -510,8 +510,416 @@ namespace ojph {
     }
 
     //////////////////////////////////////////////////////////////////////////
+    //
+    // Reversible functions for arbitrary (ARB) kernels with a single
+    // lifting coefficient per step.  The lifting equation implemented here
+    // is that of T.801 (H-3); the source sample of the single tap for the
+    // sample at index i of the updated subsequence is derived from the
+    // step offset Oatk, the parity of the first sample of the segment,
+    // and the parity of the subsequence the step updates.  Boundary
+    // extension is constant (T.801 H.2.4.3), which replicates the nearest
+    // sample of the same parity; on the subsequences used here, this is
+    // the replication of the first or last sample of the subsequence.
+    //
+    //////////////////////////////////////////////////////////////////////////
+
+    //////////////////////////////////////////////////////////////////////////
+    template <typename T>
     static
-    void gen_rev_horz_syn32(const param_atk* atk, const line_buf* dst, 
+    void gen_rev_horz_ana_arb_T(const param_atk* atk, T* lp, T* hp, T* srcp,
+                                ui32 width, bool even)
+    {
+      // split src into low and high subsequences
+      T* dph = hp;
+      T* dpl = lp;
+      T* sp = srcp;
+      ui32 w = width;
+      if (!even)
+      {
+        *dph++ = *sp++; --w;
+      }
+      for (; w > 1; w -= 2)
+      {
+        *dpl++ = *sp++; *dph++ = *sp++;
+      }
+      if (w)
+      {
+        *dpl++ = *sp++; --w;
+      }
+
+      ui32 l_width = (width + (even ? 1 : 0)) >> 1;  // low pass
+      ui32 h_width = (width + (even ? 0 : 1)) >> 1;  // high pass
+      ui32 num_steps = atk->get_num_steps();
+      for (ui32 j = num_steps; j > 0; --j)
+      {
+        const lifting_step* s = atk->get_step(j - 1);
+        const T a = s->rev.Aatk;
+        const T b = s->rev.Batk;
+        const ui8 e = s->rev.Eatk;
+        // with m_init = 0, steps at odd positions (in the signalled,
+        // reconstruction order) update the odd-indexed subsequence
+        const bool updates_odd = ((j - 1) & 1) == 1;
+
+        // constant extension of the source subsequence
+        lp[-1] = lp[0];
+        lp[l_width] = lp[l_width - 1];
+        // one-tap lifting step
+        const T* sp = lp + s->rev.Oatk
+                    + (even ? 1 : 0) - (updates_odd ? 1 : 0);
+        T* dp = hp;
+        if (a == -1 && b == 0 && e == 0)
+        { // previous-sample predict
+          for (ui32 i = h_width; i > 0; --i, sp++, dp++)
+            *dp -= sp[0];
+        }
+        else if (a == 0)
+        { // null step; only the constant contributes, if anything
+          const T v = (T)(b >> e);
+          if (v != 0)
+            for (ui32 i = h_width; i > 0; --i, dp++)
+              *dp += v;
+        }
+        else
+        { // general case
+          for (ui32 i = h_width; i > 0; --i, sp++, dp++)
+            *dp = (T)(*dp + ((b + a * sp[0]) >> e));
+        }
+
+        // swap buffers
+        T* t = lp; lp = hp; hp = t;
+        even = !even;
+        ui32 w = l_width; l_width = h_width; h_width = w;
+      }
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    // True when the kernel is the two-step previous-sample predict-only
+    // kernel (a null update step, then H = odd - preceding even), for which
+    // fused single-pass transforms are provided below.
+    static bool is_fused_prev_sample_kernel(const param_atk* atk)
+    {
+      if (atk->get_num_steps() != 2)
+        return false;
+      const lifting_step* s0 = atk->get_step(0);
+      const lifting_step* s1 = atk->get_step(1);
+      return s0->rev.Aatk == 0 && (s0->rev.Batk >> s0->rev.Eatk) == 0 &&
+             s1->rev.Aatk == -1 && s1->rev.Batk == 0 && s1->rev.Eatk == 0 &&
+             s1->rev.Oatk == 0;
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    // Fused analysis for the previous-sample kernel: the deinterleaving and
+    // the one-tap prediction are performed in a single pass over the input.
+    template <typename T>
+    static
+    void gen_rev_horz_ana_prev_T(T* lp, T* hp, const T* sp,
+                                 ui32 width, bool even)
+    {
+      if (even)
+      { // first sample is low-pass: H[i] = src[2i+1] - src[2i]
+        ui32 l_width = (width + 1) >> 1;
+        ui32 h_width = width >> 1;
+        for (ui32 i = 0; i < h_width; ++i) {
+          lp[i] = sp[2 * i];
+          hp[i] = sp[2 * i + 1] - sp[2 * i];
+        }
+        if (l_width > h_width)
+          lp[l_width - 1] = sp[width - 1];
+      }
+      else
+      { // first sample is high-pass; its preceding even sample is beyond
+        // the boundary, and constant extension replicates the nearest
+        // even-indexed sample, src[1]: H[0] = src[0] - src[1]
+        ui32 h_width = (width + 1) >> 1;
+        hp[0] = sp[0] - sp[1];
+        for (ui32 i = 1; i < h_width; ++i) {
+          lp[i - 1] = sp[2 * i - 1];
+          hp[i] = sp[2 * i] - sp[2 * i - 1];
+        }
+        if ((width & 1) == 0)
+          lp[(width >> 1) - 1] = sp[width - 1];
+      }
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    void rev_horz_ana_arb(const param_atk* atk, const line_buf* ldst,
+                          const line_buf* hdst, const line_buf* src,
+                          ui32 width, bool even)
+    {
+      if (width > 1)
+      {
+        if (is_fused_prev_sample_kernel(atk))
+        {
+          if (src->flags & line_buf::LFT_16BIT)
+            gen_rev_horz_ana_prev_T<si16>(ldst->i16, hdst->i16, src->i16,
+                                          width, even);
+          else if (src->flags & line_buf::LFT_32BIT)
+            gen_rev_horz_ana_prev_T<si32>(ldst->i32, hdst->i32, src->i32,
+                                          width, even);
+          else
+            gen_rev_horz_ana_prev_T<si64>(ldst->i64, hdst->i64, src->i64,
+                                          width, even);
+        }
+        else if (src->flags & line_buf::LFT_16BIT)
+          gen_rev_horz_ana_arb_T<si16>(atk, ldst->i16, hdst->i16, src->i16,
+                                       width, even);
+        else if (src->flags & line_buf::LFT_32BIT)
+          gen_rev_horz_ana_arb_T<si32>(atk, ldst->i32, hdst->i32, src->i32,
+                                       width, even);
+        else
+          gen_rev_horz_ana_arb_T<si64>(atk, ldst->i64, hdst->i64, src->i64,
+                                       width, even);
+      }
+      else
+      {
+        if (src->flags & line_buf::LFT_16BIT) {
+          if (even)
+            ldst->i16[0] = src->i16[0];
+          else
+            hdst->i16[0] = (si16)(src->i16[0] << 1);
+        }
+        else if (src->flags & line_buf::LFT_32BIT) {
+          if (even)
+            ldst->i32[0] = src->i32[0];
+          else
+            hdst->i32[0] = src->i32[0] << 1;
+        }
+        else {
+          if (even)
+            ldst->i64[0] = src->i64[0];
+          else
+            hdst->i64[0] = src->i64[0] << 1;
+        }
+      }
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    template <typename T>
+    static
+    void gen_rev_horz_syn_arb_T(const param_atk* atk, T* dstp, T* lp, T* hp,
+                                ui32 width, bool even)
+    {
+      bool ev = even;
+      T* oth = hp, * aug = lp;
+      ui32 aug_width = (width + (even ? 1 : 0)) >> 1;  // low pass
+      ui32 oth_width = (width + (even ? 0 : 1)) >> 1;  // high pass
+      ui32 num_steps = atk->get_num_steps();
+      for (ui32 j = 0; j < num_steps; ++j)
+      {
+        const lifting_step* s = atk->get_step(j);
+        const T a = s->rev.Aatk;
+        const T b = s->rev.Batk;
+        const ui8 e = s->rev.Eatk;
+        // with m_init = 0, steps at odd positions (in the signalled,
+        // reconstruction order) update the odd-indexed subsequence
+        const bool updates_odd = (j & 1) == 1;
+
+        // constant extension of the source subsequence
+        oth[-1] = oth[0];
+        oth[oth_width] = oth[oth_width - 1];
+        // one-tap lifting step
+        const T* sp = oth + s->rev.Oatk
+                    + (updates_odd ? 0 : 1) - (ev ? 1 : 0);
+        T* dp = aug;
+        if (a == -1 && b == 0 && e == 0)
+        { // previous-sample predict
+          for (ui32 i = aug_width; i > 0; --i, sp++, dp++)
+            *dp += sp[0];
+        }
+        else if (a == 0)
+        { // null step; only the constant contributes, if anything
+          const T v = (T)(b >> e);
+          if (v != 0)
+            for (ui32 i = aug_width; i > 0; --i, dp++)
+              *dp -= v;
+        }
+        else
+        { // general case
+          for (ui32 i = aug_width; i > 0; --i, sp++, dp++)
+            *dp = (T)(*dp - ((b + a * sp[0]) >> e));
+        }
+
+        // swap buffers
+        T* t = aug; aug = oth; oth = t;
+        ev = !ev;
+        ui32 w = aug_width; aug_width = oth_width; oth_width = w;
+      }
+
+      // combine both low and high subsequences into dst
+      T* sph = hp;
+      T* spl = lp;
+      T* dp = dstp;
+      ui32 w = width;
+      if (!even)
+      {
+        *dp++ = *sph++; --w;
+      }
+      for (; w > 1; w -= 2)
+      {
+        *dp++ = *spl++; *dp++ = *sph++;
+      }
+      if (w)
+      {
+        *dp++ = *spl++; --w;
+      }
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    // Fused synthesis for the previous-sample kernel; the inverse of
+    // gen_rev_horz_ana_prev_T, interleaving in the same single pass.
+    template <typename T>
+    static
+    void gen_rev_horz_syn_prev_T(T* dp, const T* lp, const T* hp,
+                                 ui32 width, bool even)
+    {
+      if (even)
+      {
+        ui32 h_width = width >> 1;
+        ui32 l_width = (width + 1) >> 1;
+        for (ui32 i = 0; i < h_width; ++i) {
+          dp[2 * i] = lp[i];
+          dp[2 * i + 1] = hp[i] + lp[i];
+        }
+        if (l_width > h_width)
+          dp[width - 1] = lp[l_width - 1];
+      }
+      else
+      {
+        ui32 h_width = (width + 1) >> 1;
+        dp[0] = hp[0] + lp[0];
+        for (ui32 i = 1; i < h_width; ++i) {
+          dp[2 * i - 1] = lp[i - 1];
+          dp[2 * i] = hp[i] + lp[i - 1];
+        }
+        if ((width & 1) == 0)
+          dp[width - 1] = lp[(width >> 1) - 1];
+      }
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    void rev_horz_syn_arb(const param_atk* atk, const line_buf* dst,
+                          const line_buf* lsrc, const line_buf* hsrc,
+                          ui32 width, bool even)
+    {
+      if (width > 1)
+      {
+        if (is_fused_prev_sample_kernel(atk))
+        {
+          if (dst->flags & line_buf::LFT_16BIT)
+            gen_rev_horz_syn_prev_T<si16>(dst->i16, lsrc->i16, hsrc->i16,
+                                          width, even);
+          else if (dst->flags & line_buf::LFT_32BIT)
+            gen_rev_horz_syn_prev_T<si32>(dst->i32, lsrc->i32, hsrc->i32,
+                                          width, even);
+          else
+            gen_rev_horz_syn_prev_T<si64>(dst->i64, lsrc->i64, hsrc->i64,
+                                          width, even);
+        }
+        else if (dst->flags & line_buf::LFT_16BIT)
+          gen_rev_horz_syn_arb_T<si16>(atk, dst->i16, lsrc->i16, hsrc->i16,
+                                       width, even);
+        else if (dst->flags & line_buf::LFT_32BIT)
+          gen_rev_horz_syn_arb_T<si32>(atk, dst->i32, lsrc->i32, hsrc->i32,
+                                       width, even);
+        else
+          gen_rev_horz_syn_arb_T<si64>(atk, dst->i64, lsrc->i64, hsrc->i64,
+                                       width, even);
+      }
+      else
+      {
+        if (dst->flags & line_buf::LFT_16BIT) {
+          if (even)
+            dst->i16[0] = lsrc->i16[0];
+          else
+            dst->i16[0] = (si16)(hsrc->i16[0] >> 1);
+        }
+        else if (dst->flags & line_buf::LFT_32BIT) {
+          if (even)
+            dst->i32[0] = lsrc->i32[0];
+          else
+            dst->i32[0] = hsrc->i32[0] >> 1;
+        }
+        else {
+          if (even)
+            dst->i64[0] = lsrc->i64[0];
+          else
+            dst->i64[0] = hsrc->i64[0] >> 1;
+        }
+      }
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    template <typename T>
+    static
+    void gen_rev_vert_step_one_tap_T(const lifting_step* s, const T* sp,
+                                     T* dst, ui32 repeat, bool synthesis)
+    {
+      const T a = s->rev.Aatk;
+      const T b = s->rev.Batk;
+      const ui8 e = s->rev.Eatk;
+
+      if (a == -1 && b == 0 && e == 0)
+      { // previous-sample predict
+        if (synthesis)
+          for (ui32 i = repeat; i > 0; --i)
+            *dst++ += *sp++;
+        else
+          for (ui32 i = repeat; i > 0; --i)
+            *dst++ -= *sp++;
+      }
+      else if (a == 0)
+      { // null step; only the constant contributes, if anything
+        const T v = (T)(b >> e);
+        if (v != 0)
+        {
+          if (synthesis)
+            for (ui32 i = repeat; i > 0; --i)
+              *dst++ -= v;
+          else
+            for (ui32 i = repeat; i > 0; --i)
+              *dst++ += v;
+        }
+      }
+      else
+      { // general case
+        if (synthesis)
+          for (ui32 i = repeat; i > 0; --i, ++dst, ++sp)
+            *dst = (T)(*dst - ((b + a * *sp) >> e));
+        else
+          for (ui32 i = repeat; i > 0; --i, ++dst, ++sp)
+            *dst = (T)(*dst + ((b + a * *sp) >> e));
+      }
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    void rev_vert_step_one_tap(const lifting_step* s, const line_buf* src,
+                               const line_buf* aug, ui32 repeat,
+                               bool synthesis)
+    {
+      if (aug->flags & line_buf::LFT_16BIT)
+      {
+        assert(src == NULL || src->flags & line_buf::LFT_16BIT);
+        gen_rev_vert_step_one_tap_T<si16>(s, src->i16, aug->i16, repeat,
+                                          synthesis);
+      }
+      else if (aug->flags & line_buf::LFT_32BIT)
+      {
+        assert(src == NULL || src->flags & line_buf::LFT_32BIT);
+        gen_rev_vert_step_one_tap_T<si32>(s, src->i32, aug->i32, repeat,
+                                          synthesis);
+      }
+      else
+      {
+        assert((aug->flags & line_buf::LFT_64BIT) &&
+               (src == NULL || src->flags & line_buf::LFT_64BIT));
+        gen_rev_vert_step_one_tap_T<si64>(s, src->i64, aug->i64, repeat,
+                                          synthesis);
+      }
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    static
+    void gen_rev_horz_syn32(const param_atk* atk, const line_buf* dst,
                             const line_buf* lsrc, const line_buf* hsrc, 
                             ui32 width, bool even)
     {

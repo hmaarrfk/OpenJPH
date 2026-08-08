@@ -104,7 +104,9 @@ namespace ojph {
       ui32 width = band_rect.siz.w + 1;
       if (reversible)
       {
-        if (precision <= 32)
+        if (can_use_16bit_lines(qp, cdp, codestream->get_siz(), comp_num))
+          allocator->pre_alloc_data<si16>(width, 1);
+        else if (precision <= 32)
           allocator->pre_alloc_data<si32>(width, 1);
         else
           allocator->pre_alloc_data<si64>(width, 1);
@@ -211,7 +213,9 @@ namespace ojph {
       ui32 width = band_rect.siz.w + 1;
       if (reversible)
       {
-        if (precision <= 32)
+        if (can_use_16bit_lines(qcd, cdp, codestream->get_siz(), comp_num))
+          lines->wrap(allocator->post_alloc_data<si16>(width, 1), width, 1);
+        else if (precision <= 32)
           lines->wrap(allocator->post_alloc_data<si32>(width, 1), width, 1);
         else
           lines->wrap(allocator->post_alloc_data<si64>(width, 1), width, 1);

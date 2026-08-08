@@ -56,6 +56,63 @@ namespace ojph {
   namespace local
   {
     //////////////////////////////////////////////////////////////////////////
+    // Dispatch reversible horizontal transforms to the whole-sample
+    // symmetric machinery (possibly accelerated) or to the generic
+    // arbitrary-kernel machinery.
+    static inline
+    void dispatch_rev_horz_ana(const param_atk* atk, const line_buf* ldst,
+                               const line_buf* hdst, const line_buf* src,
+                               ui32 width, bool even)
+    {
+      if (atk->is_whole_sample())
+        rev_horz_ana(atk, ldst, hdst, src, width, even);
+      else
+        rev_horz_ana_arb(atk, ldst, hdst, src, width, even);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    static inline
+    void dispatch_rev_horz_syn(const param_atk* atk, const line_buf* dst,
+                               const line_buf* lsrc, const line_buf* hsrc,
+                               ui32 width, bool even)
+    {
+      if (atk->is_whole_sample())
+        rev_horz_syn(atk, dst, lsrc, hsrc, width, even);
+      else
+        rev_horz_syn_arb(atk, dst, lsrc, hsrc, width, even);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    // Apply one reversible vertical lifting step.  For whole-sample
+    // symmetric kernels, the step involves the line above (above) and the
+    // line below (below) the line being updated.  For arbitrary kernels
+    // with a single lifting coefficient, the step involves one of the two,
+    // selected from the step offset Oatk and the parity of the subsequence
+    // the step updates, following T.801 (H-3); step_num is the position of
+    // the step in the signalled (reconstruction) order.
+    static inline
+    void dispatch_rev_vert_step(const param_atk* atk, ui32 step_num,
+                                const line_buf* below, const line_buf* above,
+                                const line_buf* aug, ui32 width,
+                                bool synthesis)
+    {
+      const lifting_step* s = atk->get_step(step_num);
+      if (atk->is_whole_sample())
+        rev_vert_step(s, below, above, aug, width, synthesis);
+      else
+      {
+        // with m_init = 0, steps at odd positions update the odd-indexed
+        // subsequence (the lines below and above it hold even-indexed
+        // lines), and vice versa
+        bool updates_odd = (step_num & 1) == 1;
+        const line_buf* src = updates_odd
+          ? (s->rev.Oatk == 0 ? above : below)
+          : (s->rev.Oatk == 0 ? below : above);
+        rev_vert_step_one_tap(s, src, aug, width, synthesis);
+      }
+    }
+
+    //////////////////////////////////////////////////////////////////////////
     void resolution::pre_alloc(codestream* codestream, const rect& res_rect,
                                const rect& recon_res_rect,
                                ui32 comp_num, ui32 res_num)
@@ -209,11 +266,19 @@ namespace ojph {
         ui32 precision = qp->propose_precision(cdp);
         const param_atk* atk = cdp->access_atk();
         bool reversible = atk->is_reversible();
+        bool use16 = can_use_16bit_lines(qp, cdp, codestream->get_siz(),
+                                         comp_num);
 
         ui32 width = res_rect.siz.w + 1;
         if (reversible)
         {
-          if (precision <= 32) {
+          if (use16) {
+            for (ui32 i = 0; i < num_steps; ++i)
+              allocator->pre_alloc_data<si16>(width, 1);
+            allocator->pre_alloc_data<si16>(width, 1);
+            allocator->pre_alloc_data<si16>(width, 1);
+          }
+          else if (precision <= 32) {
             for (ui32 i = 0; i < num_steps; ++i)
               allocator->pre_alloc_data<si32>(width, 1);
             allocator->pre_alloc_data<si32>(width, 1);
@@ -482,12 +547,24 @@ namespace ojph {
 
         const param_qcd* qp = codestream->access_qcd()->get_qcc(comp_num);
         ui32 precision = qp->propose_precision(cdp);
+        bool use16 = can_use_16bit_lines(qp, cdp, codestream->get_siz(),
+                                         comp_num);
 
         // initiate storage of line_buf
         ui32 width = res_rect.siz.w + 1;
         if (this->reversible)
         {
-          if (precision <= 32)
+          if (use16)
+          {
+            for (ui32 i = 0; i < num_steps; ++i)
+              ssp[i].line->wrap(
+                allocator->post_alloc_data<si16>(width, 1), width, 1);
+            sig->line->wrap(
+              allocator->post_alloc_data<si16>(width, 1), width, 1);
+            aug->line->wrap(
+              allocator->post_alloc_data<si16>(width, 1), width, 1);
+          }
+          else if (precision <= 32)
           {
             for (ui32 i = 0; i < num_steps; ++i)
               ssp[i].line->wrap(
@@ -576,14 +653,14 @@ namespace ojph {
                 line_buf* dp = aug->line;
                 line_buf* sp1 = sig->active ? sig->line : ssp[i].line;
                 line_buf* sp2 = ssp[i].active ? ssp[i].line : sig->line;
-                const lifting_step* s = atk->get_step(num_steps - i - 1);
-                rev_vert_step(s, sp1, sp2, dp, width, false);
+                dispatch_rev_vert_step(atk, num_steps - i - 1, sp1, sp2,
+                  dp, width, false);
               }
               lifting_buf t = *aug; *aug = ssp[i]; ssp[i] = *sig; *sig = t;
             }
 
             if (aug->active) {
-              rev_horz_ana(atk, bands[2].get_line(),
+              dispatch_rev_horz_ana(atk, bands[2].get_line(),
                 bands[3].get_line(), aug->line, width, horz_even);
               bands[2].push_line();
               bands[3].push_line();
@@ -591,7 +668,7 @@ namespace ojph {
               --rows_to_produce;
             }
             if (sig->active) {
-              rev_horz_ana(atk, child_res->get_line(),
+              dispatch_rev_horz_ana(atk, child_res->get_line(),
                 bands[1].get_line(), sig->line, width, horz_even);
               bands[1].push_line();
               child_res->push_line();
@@ -605,7 +682,7 @@ namespace ojph {
         {
           if (vert_even) {
             // horizontal transform
-            rev_horz_ana(atk, child_res->get_line(),
+            dispatch_rev_horz_ana(atk, child_res->get_line(),
               bands[1].get_line(), sig->line, width, horz_even);
             bands[1].push_line();
             child_res->push_line();
@@ -613,7 +690,13 @@ namespace ojph {
           else
           {
             // vertical transform
-            if (aug->line->flags & line_buf::LFT_32BIT)
+            if (aug->line->flags & line_buf::LFT_16BIT)
+            {
+              si16* sp = aug->line->i16;
+              for (ui32 i = width; i > 0; --i, ++sp)
+                *sp = (si16)(*sp << 1);
+            }
+            else if (aug->line->flags & line_buf::LFT_32BIT)
             {
               si32* sp = aug->line->i32;
               for (ui32 i = width; i > 0; --i)
@@ -627,7 +710,7 @@ namespace ojph {
                 *sp++ <<= 1;
             }
             // horizontal transform
-            rev_horz_ana(atk, bands[2].get_line(),
+            dispatch_rev_horz_ana(atk, bands[2].get_line(),
               bands[3].get_line(), aug->line, width, horz_even);
             bands[2].push_line();
             bands[3].push_line();
@@ -742,7 +825,8 @@ namespace ojph {
               {
                 if (vert_even) { // even
                   if (transform_flags & HORZ_TRX)
-                    rev_horz_syn(atk, aug->line, child_res->pull_line(),
+                    dispatch_rev_horz_syn(atk, aug->line,
+                      child_res->pull_line(),
                       bands[1].pull_line(), width, horz_even);
                   else
                     memcpy(aug->line->p, child_res->pull_line()->p,
@@ -755,7 +839,8 @@ namespace ojph {
                 }
                 else {
                   if (transform_flags & HORZ_TRX)
-                    rev_horz_syn(atk, sig->line, bands[2].pull_line(),
+                    dispatch_rev_horz_syn(atk, sig->line,
+                      bands[2].pull_line(),
                       bands[3].pull_line(), width, horz_even);
                   else
                     memcpy(sig->line->p, bands[2].pull_line()->p,
@@ -775,8 +860,7 @@ namespace ojph {
                   line_buf* dp = aug->line;
                   line_buf* sp1 = sig->active ? sig->line : ssp[i].line;
                   line_buf* sp2 = ssp[i].active ? ssp[i].line : sig->line;
-                  const lifting_step* s = atk->get_step(i);
-                  rev_vert_step(s, sp1, sp2, dp, width, true);
+                  dispatch_rev_vert_step(atk, i, sp1, sp2, dp, width, true);
                 }
                 lifting_buf t = *aug; *aug = ssp[i]; ssp[i] = *sig; *sig = t;
               }
@@ -795,7 +879,8 @@ namespace ojph {
           {
             if (vert_even) {
               if (transform_flags & HORZ_TRX)
-                rev_horz_syn(atk, aug->line, child_res->pull_line(),
+                dispatch_rev_horz_syn(atk, aug->line,
+                  child_res->pull_line(),
                   bands[1].pull_line(), width, horz_even);
               else
                 memcpy(aug->line->p, child_res->pull_line()->p,
@@ -805,13 +890,20 @@ namespace ojph {
             else
             {
               if (transform_flags & HORZ_TRX)
-                rev_horz_syn(atk, aug->line, bands[2].pull_line(),
+                dispatch_rev_horz_syn(atk, aug->line,
+                  bands[2].pull_line(),
                   bands[3].pull_line(), width, horz_even);
               else
                 memcpy(aug->line->p, bands[2].pull_line()->p,
                   (size_t)width
                   * (aug->line->flags & line_buf::LFT_SIZE_MASK));
-              if (aug->line->flags & line_buf::LFT_32BIT)
+              if (aug->line->flags & line_buf::LFT_16BIT)
+              {
+                si16* sp = aug->line->i16;
+                for (ui32 i = width; i > 0; --i, ++sp)
+                  *sp = (si16)(*sp >> 1);
+              }
+              else if (aug->line->flags & line_buf::LFT_32BIT)
               {
                 si32* sp = aug->line->i32;
                 for (ui32 i = width; i > 0; --i)
@@ -928,7 +1020,7 @@ namespace ojph {
         if (reversible)
         {
           if (transform_flags & HORZ_TRX)
-            rev_horz_syn(atk, aug->line, child_res->pull_line(),
+            dispatch_rev_horz_syn(atk, aug->line, child_res->pull_line(),
               bands[1].pull_line(), width, horz_even);
           else
             memcpy(aug->line->p, child_res->pull_line()->p,

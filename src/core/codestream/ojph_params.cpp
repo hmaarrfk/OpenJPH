@@ -255,10 +255,11 @@ namespace ojph {
   ////////////////////////////////////////////////////////////////////////////
   void param_cod::set_wavelet_kern(ui32 kernel)
   {
-    if (kernel > OJPH_WAVELET_REV13)
+    if (kernel > OJPH_WAVELET_REV12)
       OJPH_ERROR(0x000500F4, "Unsupported wavelet kernel %d; supported "
-        "kernels are 0 (irreversible 9/7), 1 (reversible 5/3), and "
-        "2 (reversible predict-only 1/3).", kernel);
+        "kernels are 0 (irreversible 9/7), 1 (reversible 5/3), "
+        "2 (reversible predict-only 1/3), and 3 (reversible predict-only "
+        "1/2, previous-sample prediction).", kernel);
     state->set_wavelet_kern((ui8)kernel);
   }
 
@@ -682,10 +683,10 @@ namespace ojph {
       if (file->read(&Rsiz, 2) != 2)
         OJPH_ERROR(0x00050043, "error reading SIZ marker");
       Rsiz = swap_bytes_if_le(Rsiz);
-      if ((Rsiz & 0x4000) == 0)
+      if ((Rsiz & 0x4000) == 0)  // marker for a JPH file
         OJPH_ERROR(0x00050044,
           "Rsiz bit 14 is not set (this is not a JPH file)");
-      if ((Rsiz & 0x8000) != 0 && (Rsiz & 0xD5F) != 0)
+      if ((Rsiz & 0x8000) != 0 && (Rsiz & 0xD1F) != 0)
         OJPH_WARN(0x00050001, "Rsiz in SIZ has unimplemented fields");
       if (file->read(&Xsiz, 4) != 4)
         OJPH_ERROR(0x00050045, "error reading SIZ marker");
@@ -2596,15 +2597,21 @@ namespace ojph {
         OJPH_ERROR(0x000500E3, "ATK-Satk parameter sets m_init to 1, "
           "requiring odd-indexed subsequence in first reconstruction step, "
           "which is not supported yet.");
-      if (is_whole_sample() == false)  // ARB filter not supported
-        OJPH_ERROR(0x000500E4, "ATK-Satk parameter specified ARB filter, "
-          "which is not supported yet.");
+      if (is_whole_sample() == false && is_reversible() == false)
+        OJPH_ERROR(0x000500E4, "ATK-Satk parameter specified an "
+          "irreversible ARB filter, which is not supported yet; ARB "
+          "filters are supported for reversible transformations only.");
       if (is_reversible() && get_coeff_type() >= 2) // reversible & float
         OJPH_ERROR(0x000500E5, "ATK-Satk parameter does not make sense. "
           "It employs floats with reversible filtering.");
-      if (is_using_ws_extension() == false)  // only sym. ext is supported
+      if (is_whole_sample() == true && is_using_ws_extension() == false)
         OJPH_ERROR(0x000500E6, "ATK-Satk parameter requires constant "
-          "boundary extension, which is not supported yet.");
+          "boundary extension with a WS filter, which is not supported "
+          "yet.");
+      if (is_whole_sample() == false && is_using_ws_extension() == true)
+        OJPH_ERROR(0x000500F5, "ATK-Satk parameter requires whole-sample "
+          "symmetric boundary extension with an ARB filter, which is not "
+          "supported yet.");
       if (is_reversible() == false)
         if (read_coefficient(file, Katk, bytes) == false)
           OJPH_ERROR(0x000500E7, "error reading ATK-Katk parameter");
@@ -2622,6 +2629,28 @@ namespace ojph {
       {
         for (int s = 0; s < Natk; ++s)
         {
+          d[s].rev.Oatk = 0;
+          if (is_whole_sample() == false)
+          {
+            // ARB filters have a per-step offset (T.801 Table A.27)
+            if (file->read(&d[s].rev.Oatk, 1) != 1)
+              OJPH_ERROR(0x000500F6, "error reading ATK-Oatk parameter");
+            bytes -= 1;
+            // With m_init = 0, even-indexed steps (in the signalled,
+            // reconstruction order) update the even-indexed subsequence.
+            // The supported offsets keep every source sample within one
+            // sample of the target, which is what the transform machinery
+            // can access.
+            bool updates_odd = (s & 1) == 1;
+            if (updates_odd && d[s].rev.Oatk != 0)
+              OJPH_ERROR(0x000500F7, "ATK-Oatk value of %d for an "
+                "odd-subsequence lifting step; only 0 is supported.",
+                d[s].rev.Oatk);
+            if (!updates_odd && (d[s].rev.Oatk > 0 || d[s].rev.Oatk < -1))
+              OJPH_ERROR(0x000500F8, "ATK-Oatk value of %d for an "
+                "even-subsequence lifting step; only -1 and 0 are "
+                "supported.", d[s].rev.Oatk);
+          }
           if (file->read(&d[s].rev.Eatk, 1) != 1)
             OJPH_ERROR(0x000500E9, "error reading ATK-Eatk parameter");
           bytes -= 1;
@@ -2713,6 +2742,41 @@ namespace ojph {
     }
 
     //////////////////////////////////////////////////////////////////////////
+    void param_atk::init_rev12()
+    {
+      // A reversible predict-only kernel whose prediction of each
+      // odd-indexed sample is the even-indexed sample that precedes it;
+      // the low-pass subband holds the even-indexed samples, untouched by
+      // any filtering, and the high-pass subband holds exact horizontal
+      // (or vertical) differences: H = X(2n+1) - X(2n).
+      // The one-sided prediction filter is not symmetric, so this is an
+      // arbitrary (ARB) filter in the sense of T.801, with constant
+      // boundary extension, and a per-step source offset Oatk.
+      // As with the other predict-only kernel (see init_rev13), the null
+      // update step is kept so that the kernel has an even number of
+      // steps; with m_init = 0, the first synthesis step operates on the
+      // even-indexed subsequence.
+      // Indices 0 and 1 are reserved, and 2 is used by the rev13 kernel,
+      // so this kernel is signaled with an ATK marker segment of index 3.
+      // 16-bit coefficients (Coeff_Typ = 1) are used for consistency with
+      // the rev13 kernel.
+      Satk = 0x1100 | param_cod::DWT_REV12;
+      Natk = 2;
+      // Latk(2) + Satk(2) + Natk(1), then Oatk(1) + Eatk(1) + Batk(2) +
+      // LCatk(1) + Aatk(2) per step, with 16-bit Batk and Aatk
+      // (Coeff_Typ = 1)
+      Latk = (ui16)(5 + 7 * Natk);
+      d[0].rev.Oatk = 0;  // update: s[n] += (0 * d[n] + 0) >> 0,
+      d[0].rev.Aatk = 0;  // i.e., a no-op
+      d[0].rev.Batk = 0;
+      d[0].rev.Eatk = 0;
+      d[1].rev.Oatk = 0;  // predict: d[n] += (-1 * s[n] + 0) >> 0,
+      d[1].rev.Aatk = -1; // i.e., X(2n+1) - X(2n)
+      d[1].rev.Batk = 0;
+      d[1].rev.Eatk = 0;
+    }
+
+    //////////////////////////////////////////////////////////////////////////
     bool param_atk::is_predict_only() const
     {
       // True when the kernel never modifies the low-pass (even-indexed)
@@ -2737,10 +2801,10 @@ namespace ojph {
     //////////////////////////////////////////////////////////////////////////
     bool param_atk::write(outfile_base *file)
     {
-      // Only whole-sample symmetric reversible kernels, with one
-      // coefficient per lifting step and 8- or 16-bit coefficients, can be
-      // written; these are the only kernels the encoder can employ.
-      assert(is_reversible() && is_whole_sample() && is_m_init0());
+      // Only reversible kernels, with one coefficient per lifting step and
+      // 8- or 16-bit coefficients, can be written; these are the only
+      // kernels the encoder can employ.
+      assert(is_reversible() && is_m_init0());
       int coeff_type = get_coeff_type();
       assert(coeff_type == 0 || coeff_type == 1);
 
@@ -2756,6 +2820,9 @@ namespace ojph {
       result &= file->write(&Natk, 1) == 1;
       for (int s = 0; s < Natk; ++s)
       {
+        if (is_whole_sample() == false)
+          // ARB filters have a per-step offset (T.801 Table A.27)
+          result &= file->write(&d[s].rev.Oatk, 1) == 1;
         result &= file->write(&d[s].rev.Eatk, 1) == 1;
         // Batk has the size of the coefficient type Coeff_Typ
         // (T.801 Table A.27)

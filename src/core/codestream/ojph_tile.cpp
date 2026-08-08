@@ -345,7 +345,18 @@ namespace ojph {
         assert(comp_num < num_comps);
         ui32 comp_width = comp_rects[comp_num].siz.w;
         line_buf *tc = comps[comp_num].get_line();
-        if (reversible[comp_num])
+        if (tc->flags & line_buf::LFT_16BIT)
+        {
+          // 16-bit component lines hold reversible, unsigned samples with
+          // no type-3 non-linearity (see can_use_16bit_lines); narrow
+          // while applying the level shift
+          const si32 *sp = line->i32 + line_offsets[comp_num];
+          si16 *dp = tc->i16;
+          si32 shift = (si32)((si64)1 << (num_bits[comp_num] - 1));
+          for (ui32 i = comp_width; i > 0; --i)
+            *dp++ = (si16)(*sp++ - shift);
+        }
+        else if (reversible[comp_num])
         {
           si64 shift = (si64)1 << (num_bits[comp_num] - 1);
           if (is_signed[comp_num] && nlt_type3[comp_num] == type3)
@@ -439,7 +450,18 @@ namespace ojph {
       if (!employ_color_transform || num_comps == 1)
       {
         line_buf *src_line = comps[comp_num].pull_line();
-        if (reversible[comp_num])
+        if (src_line->flags & line_buf::LFT_16BIT)
+        {
+          // 16-bit component lines hold reversible, unsigned samples with
+          // no type-3 non-linearity (see can_use_16bit_lines); widen
+          // while undoing the level shift
+          const si16 *sp = src_line->i16;
+          si32 *dp = tgt_line->i32 + line_offsets[comp_num];
+          si32 shift = (si32)((si64)1 << (num_bits[comp_num] - 1));
+          for (ui32 i = comp_width; i > 0; --i)
+            *dp++ = (si32)*sp++ + shift;
+        }
+        else if (reversible[comp_num])
         {
           si64 shift = (si64)1 << (num_bits[comp_num] - 1);
           if (is_signed[comp_num] && nlt_type3[comp_num] == type3)

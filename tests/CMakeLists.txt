@@ -64,10 +64,23 @@ target_link_libraries(
   GTest::gtest_main
 )
 
+# configure rev12 (previous-sample predict-only wavelet) tests
+add_executable(
+  test_rev12
+  test_rev12.cpp
+)
+
+target_link_libraries(
+  test_rev12
+  openjph
+  GTest::gtest_main
+)
+
 include(GoogleTest)
 gtest_add_tests(TARGET test_executables)
 gtest_add_tests(TARGET test_mixed_coc)
 gtest_add_tests(TARGET test_rev13)
+gtest_add_tests(TARGET test_rev12)
 
 if (MSVC)
   add_custom_command(TARGET test_executables POST_BUILD

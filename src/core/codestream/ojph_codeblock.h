@@ -97,6 +97,8 @@ namespace ojph {
       subband* parent;
       int line_offset;
       ui32 cur_line;
+      ui32 zero_prefix_lines; // number of leading all-zero lines that have
+                              // not been written to the buffer
       float delta, delta_inv;
       ui32 K_max;
       bool reversible;
