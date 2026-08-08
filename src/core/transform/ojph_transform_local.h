@@ -114,6 +114,23 @@ namespace ojph {
                               const line_buf* lsrc, const line_buf* hsrc,
                               ui32 width, bool even);
 
+#ifdef OJPH_ENABLE_HWY
+    //////////////////////////////////////////////////////////////////////////
+    //
+    //
+    //                 Google Highway Functions (int)
+    //
+    //
+    //////////////////////////////////////////////////////////////////////////
+
+    //////////////////////////////////////////////////////////////////////////
+    // Replaces the reversible transform function pointers with Highway
+    // implementations, when the CPU supports the target Highway was
+    // compiled for; the functions selected before the call are kept as
+    // fallbacks for the cases the Highway implementations do not handle.
+    void hwy_install_rev_transforms();
+#endif // OJPH_ENABLE_HWY
+
     //////////////////////////////////////////////////////////////////////////
     //
     //
