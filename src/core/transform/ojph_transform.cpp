@@ -593,13 +593,71 @@ namespace ojph {
     }
 
     //////////////////////////////////////////////////////////////////////////
+    // True when the kernel is the two-step previous-sample predict-only
+    // kernel (a null update step, then H = odd - preceding even), for which
+    // fused single-pass transforms are provided below.
+    static bool is_fused_prev_sample_kernel(const param_atk* atk)
+    {
+      if (atk->get_num_steps() != 2)
+        return false;
+      const lifting_step* s0 = atk->get_step(0);
+      const lifting_step* s1 = atk->get_step(1);
+      return s0->rev.Aatk == 0 && (s0->rev.Batk >> s0->rev.Eatk) == 0 &&
+             s1->rev.Aatk == -1 && s1->rev.Batk == 0 && s1->rev.Eatk == 0 &&
+             s1->rev.Oatk == 0;
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    // Fused analysis for the previous-sample kernel: the deinterleaving and
+    // the one-tap prediction are performed in a single pass over the input.
+    template <typename T>
+    static
+    void gen_rev_horz_ana_prev_T(T* lp, T* hp, const T* sp,
+                                 ui32 width, bool even)
+    {
+      if (even)
+      { // first sample is low-pass: H[i] = src[2i+1] - src[2i]
+        ui32 l_width = (width + 1) >> 1;
+        ui32 h_width = width >> 1;
+        for (ui32 i = 0; i < h_width; ++i) {
+          lp[i] = sp[2 * i];
+          hp[i] = sp[2 * i + 1] - sp[2 * i];
+        }
+        if (l_width > h_width)
+          lp[l_width - 1] = sp[width - 1];
+      }
+      else
+      { // first sample is high-pass; its preceding even sample is beyond
+        // the boundary, and constant extension replicates the nearest
+        // even-indexed sample, src[1]: H[0] = src[0] - src[1]
+        ui32 h_width = (width + 1) >> 1;
+        hp[0] = sp[0] - sp[1];
+        for (ui32 i = 1; i < h_width; ++i) {
+          lp[i - 1] = sp[2 * i - 1];
+          hp[i] = sp[2 * i] - sp[2 * i - 1];
+        }
+        if ((width & 1) == 0)
+          lp[(width >> 1) - 1] = sp[width - 1];
+      }
+    }
+
+    //////////////////////////////////////////////////////////////////////////
     void rev_horz_ana_arb(const param_atk* atk, const line_buf* ldst,
                           const line_buf* hdst, const line_buf* src,
                           ui32 width, bool even)
     {
       if (width > 1)
       {
-        if (src->flags & line_buf::LFT_32BIT)
+        if (is_fused_prev_sample_kernel(atk))
+        {
+          if (src->flags & line_buf::LFT_32BIT)
+            gen_rev_horz_ana_prev_T<si32>(ldst->i32, hdst->i32, src->i32,
+                                          width, even);
+          else
+            gen_rev_horz_ana_prev_T<si64>(ldst->i64, hdst->i64, src->i64,
+                                          width, even);
+        }
+        else if (src->flags & line_buf::LFT_32BIT)
           gen_rev_horz_ana_arb_T<si32>(atk, ldst->i32, hdst->i32, src->i32,
                                        width, even);
         else
@@ -695,13 +753,54 @@ namespace ojph {
     }
 
     //////////////////////////////////////////////////////////////////////////
+    // Fused synthesis for the previous-sample kernel; the inverse of
+    // gen_rev_horz_ana_prev_T, interleaving in the same single pass.
+    template <typename T>
+    static
+    void gen_rev_horz_syn_prev_T(T* dp, const T* lp, const T* hp,
+                                 ui32 width, bool even)
+    {
+      if (even)
+      {
+        ui32 h_width = width >> 1;
+        ui32 l_width = (width + 1) >> 1;
+        for (ui32 i = 0; i < h_width; ++i) {
+          dp[2 * i] = lp[i];
+          dp[2 * i + 1] = hp[i] + lp[i];
+        }
+        if (l_width > h_width)
+          dp[width - 1] = lp[l_width - 1];
+      }
+      else
+      {
+        ui32 h_width = (width + 1) >> 1;
+        dp[0] = hp[0] + lp[0];
+        for (ui32 i = 1; i < h_width; ++i) {
+          dp[2 * i - 1] = lp[i - 1];
+          dp[2 * i] = hp[i] + lp[i - 1];
+        }
+        if ((width & 1) == 0)
+          dp[width - 1] = lp[(width >> 1) - 1];
+      }
+    }
+
+    //////////////////////////////////////////////////////////////////////////
     void rev_horz_syn_arb(const param_atk* atk, const line_buf* dst,
                           const line_buf* lsrc, const line_buf* hsrc,
                           ui32 width, bool even)
     {
       if (width > 1)
       {
-        if (dst->flags & line_buf::LFT_32BIT)
+        if (is_fused_prev_sample_kernel(atk))
+        {
+          if (dst->flags & line_buf::LFT_32BIT)
+            gen_rev_horz_syn_prev_T<si32>(dst->i32, lsrc->i32, hsrc->i32,
+                                          width, even);
+          else
+            gen_rev_horz_syn_prev_T<si64>(dst->i64, lsrc->i64, hsrc->i64,
+                                          width, even);
+        }
+        else if (dst->flags & line_buf::LFT_32BIT)
           gen_rev_horz_syn_arb_T<si32>(atk, dst->i32, lsrc->i32, hsrc->i32,
                                        width, even);
         else
