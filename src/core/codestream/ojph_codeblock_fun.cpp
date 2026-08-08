@@ -110,6 +110,16 @@ namespace ojph {
                             float delta_inv, ui32 count, ui64* max_val);
 
     //////////////////////////////////////////////////////////////////////////
+    void  gen_rev_tx_from_cb16(const ui32 *sp, si16 *dp, ui32 K_max,
+                               ui32 count);
+#ifdef OJPH_ENABLE_HWY
+    void  hwy_rev_tx_from_cb16(const ui32 *sp, si16 *dp, ui32 K_max,
+                               ui32 count);
+    void  hwy_rev_tx_from_cb32(const ui32 *sp, void *dp, ui32 K_max,
+                               float delta, ui32 count);
+#endif
+
+    //////////////////////////////////////////////////////////////////////////
     void  gen_rev_tx_from_cb32(const ui32 *sp, void *dp, ui32 K_max,
                                float delta, ui32 count);
     void sse2_rev_tx_from_cb32(const ui32 *sp, void *dp, ui32 K_max,
@@ -152,6 +162,7 @@ namespace ojph {
       decode_cb32 = ojph_decode_codeblock32;
       find_max_val32 = gen_find_max_val32;
       mem_clear = gen_mem_clear;
+      tx_from_cb16 = gen_rev_tx_from_cb16;
       if (reversible) {
         tx_to_cb32 = gen_rev_tx_to_cb32;
         tx_from_cb32 = gen_rev_tx_from_cb32;
@@ -260,6 +271,13 @@ namespace ojph {
           bool result = initialize_block_encoder_tables_hwy();
           assert(result); ojph_unused(result);
         }
+        // Google Highway decode-side kernels; the hwy translation unit is
+        // compiled for a statically selected AVX2 target, so gate on AVX2.
+        // Only tx_from_cb16 is dispatched: hwy_rev_tx_from_cb32 measured
+        // slightly slower than the hand-written avx2_rev_tx_from_cb32
+        // (which skips tail handling by rounding up to whole vectors)
+        if (get_cpu_ext_level() >= X86_CPU_EXT_LEVEL_AVX2)
+          tx_from_cb16 = hwy_rev_tx_from_cb16;
       #endif // OJPH_ENABLE_HWY
 
       #if (defined(OJPH_ARCH_X86_64) && !defined(OJPH_DISABLE_AVX512))
@@ -316,6 +334,7 @@ namespace ojph {
       decode_cb32 = ojph_decode_codeblock_wasm;
       find_max_val32 = wasm_find_max_val32;
       mem_clear = wasm_mem_clear;
+      tx_from_cb16 = gen_rev_tx_from_cb16;
       if (reversible) {
         tx_to_cb32 = wasm_rev_tx_to_cb32;
         tx_from_cb32 = wasm_rev_tx_from_cb32;
