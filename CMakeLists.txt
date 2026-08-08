@@ -53,6 +53,8 @@ option(OJPH_DISABLE_AVX2 "Disables the use of AVX2 SIMD instructions and associa
 option(OJPH_DISABLE_AVX512 "Disables the use of AVX512 SIMD instructions and associated files" OFF)
 option(OJPH_DISABLE_NEON "Disables the use of NEON SIMD instructions and associated files" OFF)
 
+option(OJPH_ENABLE_HWY "Enables Google Highway (libhwy) code paths; needs hwy headers (auto-disabled when not found)" ON)
+
 ## options that are being deprecated
 if (DEFINED OJPH_DISABLE_INTEL_SIMD)
   message(STATUS "OJPH_DISABLE_INTEL_SIMD is being deprecated. Instead, use \"OJPH_DISABLE_SIMD\", "
@@ -72,6 +74,19 @@ if (DEFINED OJPH_ENABLE_INTEL_AVX512)
   endif()
   message(STATUS "OJPH_DISABLE_AVX512 is set to ${OJPH_DISABLE_AVX512}")
   unset(OJPH_ENABLE_INTEL_AVX512)
+endif()
+
+## Google Highway detection; header-only usage (static dispatch)
+if (OJPH_ENABLE_HWY)
+  find_path(OJPH_HWY_INCLUDE_DIR NAMES hwy/highway.h
+            HINTS $ENV{CONDA_PREFIX}/include)
+  if (OJPH_HWY_INCLUDE_DIR)
+    message(STATUS "Google Highway headers found: ${OJPH_HWY_INCLUDE_DIR}")
+  else()
+    message(STATUS "Google Highway headers not found; "
+                   "disabling OJPH_ENABLE_HWY")
+    set(OJPH_ENABLE_HWY OFF)
+  endif()
 endif()
 
 ## Setting some of the options if EMSCRIPTEN is the compiler

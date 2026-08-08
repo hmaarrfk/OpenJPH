@@ -11,6 +11,7 @@ file(GLOB CODING_SSSE3     "coding/*_ssse3.cpp")
 file(GLOB CODING_WASM      "coding/*_wasm.cpp")
 file(GLOB CODING_AVX2      "coding/*_avx2.cpp")
 file(GLOB CODING_AVX512    "coding/*_avx512.cpp")
+file(GLOB CODING_HWY       "coding/*_hwy.cpp")
 file(GLOB CODING_VSX       "coding/*_vsx.cpp")
 file(GLOB COMMON           "openjph/*.h")
 file(GLOB OTHERS           "others/*.cpp" "others/*.c")
@@ -24,7 +25,7 @@ file(GLOB TRANSFORM_WASM   "transform/*_wasm.cpp")
 file(GLOB TRANSFORM_VSX    "transform/*_vsx.cpp")
 
 list(REMOVE_ITEM CODESTREAM ${CODESTREAM_SSE} ${CODESTREAM_SSE2} ${CODESTREAM_AVX} ${CODESTREAM_AVX2} ${CODESTREAM_WASM} ${CODESTREAM_VSX})
-list(REMOVE_ITEM CODING ${CODING_SSSE3} ${CODING_WASM} ${CODING_AVX2} ${CODING_AVX512} ${CODING_VSX})
+list(REMOVE_ITEM CODING ${CODING_SSSE3} ${CODING_WASM} ${CODING_AVX2} ${CODING_AVX512} ${CODING_HWY} ${CODING_VSX})
 list(REMOVE_ITEM TRANSFORM ${TRANSFORM_SSE} ${TRANSFORM_SSE2} ${TRANSFORM_AVX} ${TRANSFORM_AVX2} ${TRANSFORM_AVX512} ${TRANSFORM_WASM} ${TRANSFORM_VSX})
 list(APPEND SOURCES ${CODESTREAM} ${CODING} ${COMMON} ${OTHERS} ${TRANSFORM})
 
@@ -77,6 +78,10 @@ else()
         source_group("coding" FILES ${CODING_AVX512})
         source_group("transform" FILES ${TRANSFORM_AVX512})
       endif()
+      if (OJPH_ENABLE_HWY AND NOT OJPH_DISABLE_AVX2)
+        list(APPEND SOURCES ${CODING_HWY})
+        source_group("coding" FILES ${CODING_HWY})
+      endif()
 
       # Set compilation flags
       if (MSVC)
@@ -85,6 +90,7 @@ else()
         set_source_files_properties(coding/ojph_block_decoder_avx2.cpp PROPERTIES COMPILE_FLAGS "/arch:AVX2")
         set_source_files_properties(coding/ojph_block_encoder_avx2.cpp PROPERTIES COMPILE_FLAGS "/arch:AVX2")
         set_source_files_properties(coding/ojph_block_encoder_avx512.cpp PROPERTIES COMPILE_FLAGS "/arch:AVX512")
+        set_source_files_properties(coding/ojph_block_encoder_hwy.cpp PROPERTIES COMPILE_FLAGS "/arch:AVX2")
         set_source_files_properties(transform/ojph_colour_avx.cpp PROPERTIES COMPILE_FLAGS "/arch:AVX")
         set_source_files_properties(transform/ojph_colour_avx2.cpp PROPERTIES COMPILE_FLAGS "/arch:AVX2")
         set_source_files_properties(transform/ojph_transform_avx.cpp PROPERTIES COMPILE_FLAGS "/arch:AVX")
@@ -99,6 +105,11 @@ else()
         set_source_files_properties(coding/ojph_block_decoder_avx2.cpp PROPERTIES COMPILE_FLAGS -mavx2)
         set_source_files_properties(coding/ojph_block_encoder_avx2.cpp PROPERTIES COMPILE_FLAGS -mavx2)
         set_source_files_properties(coding/ojph_block_encoder_avx512.cpp PROPERTIES COMPILE_FLAGS "-mavx512f -mavx512cd")
+        # static dispatch: the Highway TU targets the local best (AVX2);
+        # run-time gated on X86_CPU_EXT_LEVEL_AVX2 in ojph_codeblock_fun.cpp.
+        # Highway's static AVX2 target additionally needs
+        # BMI2/FMA/F16C/AES/PCLMUL (present on every AVX2-capable CPU).
+        set_source_files_properties(coding/ojph_block_encoder_hwy.cpp PROPERTIES COMPILE_FLAGS "-mavx2 -mbmi -mbmi2 -mfma -mf16c -maes -mpclmul")
         set_source_files_properties(transform/ojph_colour_sse.cpp PROPERTIES COMPILE_FLAGS -msse)
         set_source_files_properties(transform/ojph_colour_sse2.cpp PROPERTIES COMPILE_FLAGS -msse2)
         set_source_files_properties(transform/ojph_colour_avx.cpp PROPERTIES COMPILE_FLAGS -mavx)
@@ -153,6 +164,12 @@ add_library(ojph ${SOURCES})
 ## The option BUILD_SHARED_LIBS
 if (BUILD_SHARED_LIBS AND WIN32)
   target_compile_definitions(ojph PRIVATE OJPH_BUILD_SHARED_LIBRARY)
+endif()
+
+## Google Highway code paths
+if (OJPH_ENABLE_HWY AND NOT OJPH_DISABLE_AVX2)
+  target_compile_definitions(ojph PRIVATE OJPH_ENABLE_HWY)
+  target_include_directories(ojph PRIVATE ${OJPH_HWY_INCLUDE_DIR})
 endif()
 
 ## include library version/name
