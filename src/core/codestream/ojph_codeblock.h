@@ -84,6 +84,13 @@ namespace ojph {
       void decode();
       void pull_line(line_buf *line);
 
+      // used by subband::pull_line to clear runs of all-zero codeblocks
+      // with one memset per run, instead of one pull_line call per block
+      bool is_zero_block() const { return zero_block; }
+      int get_line_offset() const { return line_offset; }
+      ui32 get_width() const { return cb_size.w; }
+      bool is_buf64() const { return precision == BUF64; }
+
     private:
       ui32 precision;
       union {
