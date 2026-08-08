@@ -96,6 +96,7 @@ namespace ojph {
       this->parent = parent;
       this->line_offset = line_offset;
       this->cur_line = 0;
+      this->zero_prefix_lines = 0;
       this->delta = parent->get_delta();
       this->delta_inv = 1.0f / this->delta;
       this->K_max = K_max;
@@ -112,8 +113,27 @@ namespace ojph {
     }
 
     //////////////////////////////////////////////////////////////////////////
+    // true when count words, starting at sp, are all zero; this is used on
+    // both integer and float data -- for floats, a bitwise-zero test treats
+    // -0.0f as nonzero, which is safely conservative
+    template <typename T>
+    static bool is_all_zero(const T *sp, ui32 count)
+    {
+      T acc = 0;
+      for (ui32 i = 0; i < count; ++i)
+        acc |= sp[i];
+      return acc == 0;
+    }
+
+    //////////////////////////////////////////////////////////////////////////
     void codeblock::push(line_buf *line)
     {
+      // Most codeblocks of mask-like or smooth images are entirely zero;
+      // for those, the buffer is never written and codeblock::encode
+      // skips them through max_val, so pushing costs only a read-only
+      // scan.  Once a nonzero line is seen, the skipped all-zero prefix
+      // is zeroed in the buffer, and later lines are written normally.
+      //
       // convert to sign and magnitude and keep max_val
       if (precision == BUF32)
       {
@@ -121,6 +141,15 @@ namespace ojph {
         const void *sp = (line->flags & line_buf::LFT_INTEGER)
           ? (const void*)(line->i32 + line_offset)
           : (const void*)(line->f32 + line_offset);
+        if (zero_prefix_lines == cur_line &&
+            is_all_zero((const ui32*)sp, cb_size.w))
+        {
+          ++zero_prefix_lines;
+          ++cur_line;
+          return;
+        }
+        if (zero_prefix_lines > 0 && zero_prefix_lines == cur_line)
+          memset(buf32, 0, (size_t)zero_prefix_lines * stride * sizeof(ui32));
         ui32 *dp = buf32 + cur_line * stride;
         this->codeblock_functions.tx_to_cb32(sp, dp, K_max, delta_inv,
                                              cb_size.w, max_val32);
@@ -131,6 +160,15 @@ namespace ojph {
         assert(precision == BUF64);
         assert(line->flags & line_buf::LFT_64BIT);
         const si64 *sp = line->i64 + line_offset;
+        if (zero_prefix_lines == cur_line &&
+            is_all_zero((const ui64*)sp, cb_size.w))
+        {
+          ++zero_prefix_lines;
+          ++cur_line;
+          return;
+        }
+        if (zero_prefix_lines > 0 && zero_prefix_lines == cur_line)
+          memset(buf64, 0, (size_t)zero_prefix_lines * stride * sizeof(ui64));
         ui64 *dp = buf64 + cur_line * stride;
         this->codeblock_functions.tx_to_cb64(sp, dp, K_max, delta_inv,
                                              cb_size.w, max_val64);
@@ -181,6 +219,7 @@ namespace ojph {
       this->cb_size = cb_size;
       this->coded_cb = coded_cb;
       this->cur_line = 0;
+      this->zero_prefix_lines = 0;
       for (int i = 0; i < 4; ++i)
         this->max_val64[i] = 0;
       this->zero_block = false;
