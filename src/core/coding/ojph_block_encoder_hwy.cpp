@@ -1184,21 +1184,40 @@ namespace ojph {
                                   : proc_cq2(x, cx_val_vec, rho0);
           vec_u32 cq0_vec = v_permute(t, left_shift_idx);
           cq0_vec = hn::InsertLane(cq0_vec, 0, prev_cq);
-          if (hn::AllTrue(du, hn::Eq(cq0_vec, v_zero()))) {
-            prev_cq = hn::ExtractLane(t, 7);
-            // update_lep / update_lcxp with all-zero e_q and rho
-            e_val_vec[x] = hn::InsertLane(v_zero(), 0,
-                                          hn::GetLane(prev_e_val_vec));
-            prev_e_val_vec = v_zero();
-            cx_val_vec[x] = hn::InsertLane(v_zero(), 0,
-              (hn::GetLane(prev_cx_val_vec) & 8) >> 3);
-            prev_cx_val_vec = v_zero();
-            // proc_mel_encode1/2 issue one mel_encode(false) per
-            // uncoded quad: i_max = 8 - ignore / 2 of them
-            ui32 _ignore = ((n_loop - 1) == x) ? ignore : 0;
-            mel_advance_run(&mel, 8 - (_ignore / 2));
-            continue;
+          prev_cq = hn::ExtractLane(t, 7);
+          // update_lep / update_lcxp with all-zero e_q and rho
+          e_val_vec[x] = hn::InsertLane(v_zero(), 0,
+                                        hn::GetLane(prev_e_val_vec));
+          prev_e_val_vec = v_zero();
+          cx_val_vec[x] = hn::InsertLane(v_zero(), 0,
+            (hn::GetLane(prev_cx_val_vec) & 8) >> 3);
+          prev_cx_val_vec = v_zero();
+          ui32 _ignore = ((n_loop - 1) == x) ? ignore : 0;
+          ui32 i_max = 8 - (_ignore / 2);
+          // proc_mel_encode1/2 issue one mel_encode(&mel, rho != 0),
+          // i.e. a zero bit, per quad whose c_q is zero; since all the
+          // bits are zero runs may be batched regardless of position
+          ui32 cq_zero_mask =
+            (ui32)hn::BitsFromMask(du, hn::Eq(cq0_vec, v_zero()))
+            & ((1u << i_max) - 1u);
+          mel_advance_run(&mel, (ui32)population_count(cq_zero_mask));
+          if (cq_zero_mask != ((1u << i_max) - 1u)) {
+            // some incoming c_q != 0: their (rho == 0, eps == 0) VLC
+            // tuples must still be emitted (u_q == 0, so the UVLC
+            // codewords are zero-length, and m == 0 means no MagSgn
+            // bits); everything else is as in the all-zero case
+            vec_u32 tuple_vec = cal_tuple(cq0_vec, rho0, rho0,
+              (PASS == 1) ? vlc_tbl0 : vlc_tbl1);
+            ui32 u_q[10] = { 0 };
+            ui32 tuple[10];
+            tuple_vec = hn::ShiftRight<4>(tuple_vec);
+            hn::StoreU(tuple_vec, du, tuple);
+            if (i_max & 1) tuple[i_max] = 0;
+            tuple[8] = 0;
+            proc_vlc_encode(&vlc, tuple, u_q, _ignore,
+                (PASS == 1) ? uvlc_tbl_pair1 : uvlc_tbl_pair2);
           }
+          continue;
         }
 
         vec_u32 rho_vec, e_qmax_vec;
