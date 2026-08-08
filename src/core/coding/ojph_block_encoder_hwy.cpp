@@ -367,6 +367,29 @@ namespace ojph {
       }
     }
 
+    //////////////////////////////////////////////////////////////////////////
+    // exactly equivalent to n calls of mel_encode(melp, false); the run
+    // counter is bumped in chunks, emitting a 1 whenever it reaches the
+    // threshold (run < threshold is an invariant of mel_encode)
+    static inline void
+    mel_advance_run(mel_struct* melp, ui32 n)
+    {
+      ui32 remaining = n;
+      while (remaining > 0) {
+        ui32 space = (ui32)melp->threshold - (ui32)melp->run;
+        if (remaining >= space) {
+          remaining -= space;
+          mel_emit_bits(melp, 1, 1);
+          melp->run = 0;
+          melp->k = ojph_min(12, melp->k + 1);
+          melp->threshold = 1 << mel_exp[melp->k];
+        } else {
+          melp->run += (int)remaining;
+          remaining = 0;
+        }
+      }
+    }
+
     /////////////////////////////////////////////////////////////////////////
     //
     /////////////////////////////////////////////////////////////////////////
@@ -1141,6 +1164,41 @@ namespace ojph {
             src_vec[3] = v_zero();
           }
           sp += 16;
+        }
+
+        /* Fast path: a chunk of 16 x 2 zero samples in a zero context
+         * (incoming c_q all zero) emits no VLC/MagSgn bits at all and
+         * only advances the MEL zero-run; this is the common case for
+         * mask-like content, where significant codeblocks are still
+         * mostly empty.  Everything it skips provably produces no
+         * output: rho == 0 and c_q == 0 give zero-length VLC tuples,
+         * u_q == 0 (so zero-length UVLC codewords), and m == 0 (so no
+         * MagSgn bits); only the per-quad mel_encode(false) calls and
+         * the line-state updates remain, and both are reproduced
+         * exactly below.  Output is bit-identical to the slow path. */
+        vec_u32 src_or = hn::Or(hn::Or(src_vec[0], src_vec[1]),
+                                hn::Or(src_vec[2], src_vec[3]));
+        if (hn::AllTrue(du, hn::Eq(src_or, v_zero()))) {
+          vec_u32 rho0 = v_zero();
+          vec_u32 t = (PASS == 1) ? v_zero()
+                                  : proc_cq2(x, cx_val_vec, rho0);
+          vec_u32 cq0_vec = v_permute(t, left_shift_idx);
+          cq0_vec = hn::InsertLane(cq0_vec, 0, prev_cq);
+          if (hn::AllTrue(du, hn::Eq(cq0_vec, v_zero()))) {
+            prev_cq = hn::ExtractLane(t, 7);
+            // update_lep / update_lcxp with all-zero e_q and rho
+            e_val_vec[x] = hn::InsertLane(v_zero(), 0,
+                                          hn::GetLane(prev_e_val_vec));
+            prev_e_val_vec = v_zero();
+            cx_val_vec[x] = hn::InsertLane(v_zero(), 0,
+              (hn::GetLane(prev_cx_val_vec) & 8) >> 3);
+            prev_cx_val_vec = v_zero();
+            // proc_mel_encode1/2 issue one mel_encode(false) per
+            // uncoded quad: i_max = 8 - ignore / 2 of them
+            ui32 _ignore = ((n_loop - 1) == x) ? ignore : 0;
+            mel_advance_run(&mel, 8 - (_ignore / 2));
+            continue;
+          }
         }
 
         vec_u32 rho_vec, e_qmax_vec;
