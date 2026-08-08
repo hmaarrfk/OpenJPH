@@ -251,6 +251,17 @@ namespace ojph {
         }
       #endif // !OJPH_DISABLE_AVX2
 
+      #ifdef OJPH_ENABLE_HWY
+        // Google Highway block encoder; statically dispatched to the
+        // best target enabled at compile time (AVX2), so it is gated on
+        // the same run-time CPU level as the AVX2 encoder above.
+        if (get_cpu_ext_level() >= X86_CPU_EXT_LEVEL_AVX2) {
+          encode_cb32 = ojph_encode_codeblock_hwy;
+          bool result = initialize_block_encoder_tables_hwy();
+          assert(result); ojph_unused(result);
+        }
+      #endif // OJPH_ENABLE_HWY
+
       #if (defined(OJPH_ARCH_X86_64) && !defined(OJPH_DISABLE_AVX512))
         if (get_cpu_ext_level() >= X86_CPU_EXT_LEVEL_AVX512) {
           encode_cb32 = ojph_encode_codeblock_avx512;
