@@ -414,6 +414,11 @@ namespace ojph {
         DWT_REV13 = 2,  // reversible predict-only kernel; the low-pass
                         // subband holds untouched even-indexed samples.
                         // Signaled with an ATK marker segment of index 2.
+        DWT_REV12 = 3,  // reversible predict-only kernel whose prediction
+                        // is the preceding even-indexed sample (a one-sided,
+                        // arbitrary filter); the low-pass subband holds
+                        // untouched even-indexed samples.  Signaled with an
+                        // ATK marker segment of index 3.
       };
 
     public: // COD_MAIN and COC_MAIN common functions
@@ -1120,7 +1125,7 @@ namespace ojph {
       };
 
       struct rev_data {
-        // si8 Oatk;     // only for arbitrary filter, offset of filter
+        si8 Oatk;        // only for arbitrary filter, offset of filter
         ui8 Eatk;        // only for reversible, epsilon, the power of 2
         si16 Batk;       // only for reversible, beta, the additive residue
         // ui8 LCatk;    // number of lifting coefficients in a step
@@ -1187,6 +1192,7 @@ namespace ojph {
       bool read(infile_base *file);
       bool write(outfile_base *file);
       void init_rev13();
+      void init_rev12();
       bool is_used() const { return Latk != 0; }
       bool is_predict_only() const;
 

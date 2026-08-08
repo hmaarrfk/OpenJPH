@@ -127,6 +127,15 @@ namespace ojph {
                               // the even-indexed samples of the previous
                               // resolution, untouched by any filtering.
                               // Signaled with an ATK marker segment (Part 2).
+      OJPH_WAVELET_REV12 = 3, // reversible predict-only (1/2) kernel: each
+                              // high-pass sample is the difference between a
+                              // sample and the sample that precedes it, and
+                              // the low-pass subband holds the even-indexed
+                              // samples of the previous resolution,
+                              // untouched by any filtering.  Signaled with
+                              // an ATK marker segment (Part 2, arbitrary
+                              // filter); decoding requires ARB kernel
+                              // support.
     };
 
   public:
