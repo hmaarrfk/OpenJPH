@@ -117,6 +117,18 @@ namespace ojph {
     }
 
     //////////////////////////////////////////////////////////////////////////
+    // or-reduce the 8-entry max_val accumulator kept by the tx_to_cb32
+    // kernels below (the generic kernels use entry 0 only, so this works
+    // for them too); called once per codeblock
+    ui32 hwy_find_max_val32(ui32* address)
+    {
+      ui32 t = address[0];
+      for (int i = 1; i < 8; ++i)
+        t |= address[i];
+      return t;
+    }
+
+    //////////////////////////////////////////////////////////////////////////
     // fold a vector or-accumulator into the caller's max_val array; the
     // array holds 8 ui32 (see codeblock::max_val32), which matches the
     // AVX2 vector width this file is compiled for; other widths fold to
