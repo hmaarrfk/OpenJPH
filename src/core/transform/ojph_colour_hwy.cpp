@@ -454,23 +454,24 @@ namespace ojph {
                          float *y, float *cb, float *cr, ui32 repeat)
     {
       const hn::ScalableTag<float> d;
-      const ui32 L = (ui32)hn::Lanes(d);
+      const int L = (int)hn::Lanes(d);
       const auto alpha_rf = hn::Set(d, CT_CNST::ALPHA_RF);
       const auto alpha_gf = hn::Set(d, CT_CNST::ALPHA_GF);
       const auto alpha_bf = hn::Set(d, CT_CNST::ALPHA_BF);
       const auto beta_cbf = hn::Set(d, CT_CNST::BETA_CbF);
       const auto beta_crf = hn::Set(d, CT_CNST::BETA_CrF);
-      for (ui32 i = 0; i < repeat; i += L)
+      for (int i = (int)repeat; i > 0;
+           i -= L, r += L, g += L, b += L, y += L, cb += L, cr += L)
       {
-        auto mr = hn::LoadU(d, r + i);
-        auto mg = hn::LoadU(d, g + i);
-        auto mb = hn::LoadU(d, b + i);
+        auto mr = hn::LoadU(d, r);
+        auto mg = hn::LoadU(d, g);
+        auto mb = hn::LoadU(d, b);
         auto my = hn::Mul(alpha_rf, mr);
         my = hn::Add(my, hn::Mul(alpha_gf, mg));
         my = hn::Add(my, hn::Mul(alpha_bf, mb));
-        hn::StoreU(my, d, y + i);
-        hn::StoreU(hn::Mul(beta_cbf, hn::Sub(mb, my)), d, cb + i);
-        hn::StoreU(hn::Mul(beta_crf, hn::Sub(mr, my)), d, cr + i);
+        hn::StoreU(my, d, y);
+        hn::StoreU(hn::Mul(beta_cbf, hn::Sub(mb, my)), d, cb);
+        hn::StoreU(hn::Mul(beta_crf, hn::Sub(mr, my)), d, cr);
       }
     }
 
@@ -480,20 +481,21 @@ namespace ojph {
                           float *r, float *g, float *b, ui32 repeat)
     {
       const hn::ScalableTag<float> d;
-      const ui32 L = (ui32)hn::Lanes(d);
+      const int L = (int)hn::Lanes(d);
       const auto gamma_cr2g = hn::Set(d, CT_CNST::GAMMA_CR2G);
       const auto gamma_cb2g = hn::Set(d, CT_CNST::GAMMA_CB2G);
       const auto gamma_cr2r = hn::Set(d, CT_CNST::GAMMA_CR2R);
       const auto gamma_cb2b = hn::Set(d, CT_CNST::GAMMA_CB2B);
-      for (ui32 i = 0; i < repeat; i += L)
+      for (int i = (int)repeat; i > 0;
+           i -= L, y += L, cb += L, cr += L, r += L, g += L, b += L)
       {
-        auto my  = hn::LoadU(d, y + i);
-        auto mcb = hn::LoadU(d, cb + i);
-        auto mcr = hn::LoadU(d, cr + i);
+        auto my  = hn::LoadU(d, y);
+        auto mcb = hn::LoadU(d, cb);
+        auto mcr = hn::LoadU(d, cr);
         auto mg = hn::Sub(my, hn::Mul(gamma_cr2g, mcr));
-        hn::StoreU(hn::Sub(mg, hn::Mul(gamma_cb2g, mcb)), d, g + i);
-        hn::StoreU(hn::Add(my, hn::Mul(gamma_cr2r, mcr)), d, r + i);
-        hn::StoreU(hn::Add(my, hn::Mul(gamma_cb2b, mcb)), d, b + i);
+        hn::StoreU(hn::Sub(mg, hn::Mul(gamma_cb2g, mcb)), d, g);
+        hn::StoreU(hn::Add(my, hn::Mul(gamma_cr2r, mcr)), d, r);
+        hn::StoreU(hn::Add(my, hn::Mul(gamma_cb2b, mcb)), d, b);
       }
     }
 
