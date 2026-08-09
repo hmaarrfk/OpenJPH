@@ -94,6 +94,25 @@ if (OJPH_ENABLE_HWY)
       set(OJPH_HWY_INCLUDE_DIR "" CACHE PATH "" FORCE)
     else()
       message(STATUS "Google Highway headers found: ${OJPH_HWY_INCLUDE_DIR}")
+      # The hwy kernels use run-time dispatch (foreach_target.h), whose
+      # target selection lives in the hwy library, so headers alone are
+      # no longer enough.
+      find_library(OJPH_HWY_LIBRARY hwy
+        HINTS ENV CONDA_PREFIX ENV HWY_ROOT
+        PATH_SUFFIXES lib)
+      if (NOT OJPH_HWY_LIBRARY)
+        if (OJPH_REQUIRE_HWY)
+          message(FATAL_ERROR "The Google Highway library (libhwy) was "
+                              "not found and OJPH_REQUIRE_HWY is ON; the "
+                              "hwy kernels dispatch at run time and need "
+                              "the library, not just the headers")
+        endif()
+        message(STATUS "Google Highway library (libhwy) not found; the "
+                       "hwy kernels dispatch at run time and need it, so "
+                       "disabling OJPH_ENABLE_HWY")
+        set(OJPH_ENABLE_HWY OFF)
+        set(OJPH_HWY_INCLUDE_DIR "" CACHE PATH "" FORCE)
+      endif()
     endif()
   else()
     if (OJPH_REQUIRE_HWY)

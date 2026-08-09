@@ -187,6 +187,22 @@ namespace ojph {
     }
 
     //////////////////////////////////////////////////////////////////////////
+    // round to nearest; NearestIntInRange (a bare cvt) exists only for
+    // the x86 SIMD targets, so the portable fallback target uses
+    // NearestInt, which is equivalent for the in-range values here
+    static inline hn::Vec<hn::ScalableTag<si32> >
+    nearest_int(hn::ScalableTag<si32> d,
+                    hn::Vec<hn::ScalableTag<float> > v)
+    {
+#if HWY_TARGET == HWY_EMU128 || HWY_TARGET == HWY_SCALAR
+      (void)d;
+      return hn::NearestInt(v);
+#else
+      return hn::NearestIntInRange(d, v);
+#endif
+    }
+
+    //////////////////////////////////////////////////////////////////////////
     // quantize float line samples to sign-magnitude ui32 codeblock
     // samples, or-accumulating the magnitudes into max_val; the hwy
     // equivalent of avx2_irv_tx_to_cb32 (round to nearest, like the
@@ -209,7 +225,7 @@ namespace ojph {
       for ( ; i + N <= count; i += (ui32)N)
       {
         auto vf = hn::Mul(hn::LoadU(df, p + i), vdelta_inv);
-        auto t = hn::NearestIntInRange(d, vf);
+        auto t = nearest_int(d, vf);
         auto sign = hn::And(t, sign_mask);
         auto val = hn::Abs(t);
         tmax = hn::Or(tmax, val);
@@ -218,7 +234,7 @@ namespace ojph {
       if (i < count)
       {
         auto vf = hn::Mul(hn::LoadU(df, p + i), vdelta_inv);
-        auto t = hn::NearestIntInRange(d, vf);
+        auto t = nearest_int(d, vf);
         auto sign = hn::And(t, sign_mask);
         auto val = hn::Abs(t);
         tmax = hn::Or(tmax,
