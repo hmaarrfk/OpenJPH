@@ -127,7 +127,7 @@ namespace ojph {
     // Replaces the colour transform function pointers (RCT and ICT) with
     // Highway implementations, when the CPU supports the target Highway
     // was compiled for.
-    void hwy_install_colour_transforms();
+    void install_colour_transforms();
 #endif // OJPH_ENABLE_HWY
 
   }

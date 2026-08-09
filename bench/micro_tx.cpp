@@ -1,4 +1,4 @@
-// Microbenchmark: gen vs sse2/avx2 vs hwy tx_from_cb kernels.
+// Microbenchmark: gen vs avx2 vs hwy tx_from_cb kernels.
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -7,11 +7,10 @@
 
 namespace ojph { namespace local {
   void gen_rev_tx_from_cb16(const ui32*, si16*, ui32, ui32);
-  void hwy_rev_tx_from_cb16(const ui32*, si16*, ui32, ui32);
+  void rev_tx_from_cb16(const ui32*, si16*, ui32, ui32);
   void gen_rev_tx_from_cb32(const ui32*, void*, ui32, float, ui32);
-  void sse2_rev_tx_from_cb32(const ui32*, void*, ui32, float, ui32);
   void avx2_rev_tx_from_cb32(const ui32*, void*, ui32, float, ui32);
-  void hwy_rev_tx_from_cb32(const ui32*, void*, ui32, float, ui32);
+  void rev_tx_from_cb32(const ui32*, void*, ui32, float, ui32);
 }}
 
 using namespace ojph;
@@ -46,21 +45,18 @@ int main()
     double g16 = bench([](const ui32*s, si16*d, ui32 w)
       { gen_rev_tx_from_cb16(s,d,K,w); }, src.data(), d16a.data(), w, iters);
     double h16 = bench([](const ui32*s, si16*d, ui32 w)
-      { hwy_rev_tx_from_cb16(s,d,K,w); }, src.data(), d16b.data(), w, iters);
+      { rev_tx_from_cb16(s,d,K,w); }, src.data(), d16b.data(), w, iters);
     if (memcmp(d16a.data(), d16b.data(), w*2)) { printf("cb16 MISMATCH\n"); return 1; }
     double g32 = bench([](const ui32*s, si32*d, ui32 w)
       { gen_rev_tx_from_cb32(s,d,K,0.f,w); }, src.data(), d32a.data(), w, iters);
-    double s32 = bench([](const ui32*s, si32*d, ui32 w)
-      { sse2_rev_tx_from_cb32(s,d,K,0.f,w); }, src.data(), d32b.data(), w, iters);
-    if (memcmp(d32a.data(), d32b.data(), w*4)) { printf("sse2 MISMATCH\n"); return 1; }
     double a32 = bench([](const ui32*s, si32*d, ui32 w)
       { avx2_rev_tx_from_cb32(s,d,K,0.f,w); }, src.data(), d32b.data(), w, iters);
     if (memcmp(d32a.data(), d32b.data(), w*4)) { printf("avx2 MISMATCH\n"); return 1; }
     double h32 = bench([](const ui32*s, si32*d, ui32 w)
-      { hwy_rev_tx_from_cb32(s,d,K,0.f,w); }, src.data(), d32b.data(), w, iters);
+      { rev_tx_from_cb32(s,d,K,0.f,w); }, src.data(), d32b.data(), w, iters);
     if (memcmp(d32a.data(), d32b.data(), w*4)) { printf("hwy32 MISMATCH\n"); return 1; }
-    printf("w=%4u  cb16 gen %6.1f  hwy %6.1f ns | cb32 gen %6.1f  sse2 %6.1f"
-           "  avx2 %6.1f  hwy %6.1f ns\n", w, g16, h16, g32, s32, a32, h32);
+    printf("w=%4u  cb16 gen %6.1f  hwy %6.1f ns | cb32 gen %6.1f"
+           "  avx2 %6.1f  hwy %6.1f ns\n", w, g16, h16, g32, a32, h32);
   }
   return 0;
 }

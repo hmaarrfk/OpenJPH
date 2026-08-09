@@ -65,7 +65,7 @@ namespace ojph {
     // one vector; the lines are padded (the SSE2/AVX2 implementations
     // rely on the same).
     static
-    void hwy_rct_forward(
+    void simd_rct_forward(
       const line_buf *r, const line_buf *g, const line_buf *b,
       line_buf *y, line_buf *cb, line_buf *cr, ui32 repeat)
     {
@@ -139,7 +139,7 @@ namespace ojph {
     //////////////////////////////////////////////////////////////////////////
     // Backward RCT; values identical to gen_rct_backward
     static
-    void hwy_rct_backward(
+    void simd_rct_backward(
       const line_buf *y, const line_buf *cb, const line_buf *cr,
       line_buf *r, line_buf *g, line_buf *b, ui32 repeat)
     {
@@ -214,7 +214,7 @@ namespace ojph {
     // Forward ICT; values identical to gen_ict_forward (no fma; see the
     // note at the top of the file)
     static
-    void hwy_ict_forward(const float *r, const float *g, const float *b,
+    void simd_ict_forward(const float *r, const float *g, const float *b,
                          float *y, float *cb, float *cr, ui32 repeat)
     {
       const hn::ScalableTag<float> d;
@@ -241,7 +241,7 @@ namespace ojph {
     //////////////////////////////////////////////////////////////////////////
     // Backward ICT; values identical to gen_ict_backward
     static
-    void hwy_ict_backward(const float *y, const float *cb, const float *cr,
+    void simd_ict_backward(const float *y, const float *cb, const float *cr,
                           float *r, float *g, float *b, ui32 repeat)
     {
       const hn::ScalableTag<float> d;
@@ -263,7 +263,7 @@ namespace ojph {
     }
 
     //////////////////////////////////////////////////////////////////////////
-    void hwy_install_colour_transforms()
+    void install_colour_transforms()
     {
 #if defined(OJPH_ARCH_X86_64) || defined(OJPH_ARCH_I386)
       // this file is compiled for a fixed Highway target; install only
@@ -279,10 +279,10 @@ namespace ojph {
         return;
   #endif
 #endif
-      rct_forward  = hwy_rct_forward;
-      rct_backward = hwy_rct_backward;
-      ict_forward  = hwy_ict_forward;
-      ict_backward = hwy_ict_backward;
+      rct_forward  = simd_rct_forward;
+      rct_backward = simd_rct_backward;
+      ict_forward  = simd_ict_forward;
+      ict_backward = simd_ict_backward;
     }
 
   } // !local namespace

@@ -144,8 +144,8 @@ namespace ojph {
         // reversible transform functions selected above, keeping the
         // replaced functions as fallbacks for the cases it does not handle,
         // and all of the irreversible ones.
-        hwy_install_rev_transforms();
-        hwy_install_irv_transforms();
+        install_rev_transforms();
+        install_irv_transforms();
     #endif
 
   #endif // !OJPH_DISABLE_SIMD

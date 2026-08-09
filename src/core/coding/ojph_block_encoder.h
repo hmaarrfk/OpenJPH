@@ -66,14 +66,14 @@ namespace ojph {
                               ojph::coded_lists *& coded);
 
     void
-      ojph_encode_codeblock_hwy(ui32* buf, ui32 missing_msbs,
+      ojph_encode_codeblock_simd(ui32* buf, ui32 missing_msbs,
                                 ui32 num_passes, ui32 width, ui32 height,
                                 ui32 stride, ui32* lengths,
                                 ojph::mem_elastic_allocator* elastic,
                                 ojph::coded_lists*& coded);
 
     bool initialize_block_encoder_tables();
-    bool initialize_block_encoder_tables_hwy();
+    bool initialize_block_encoder_tables_simd();
   }
 }
 

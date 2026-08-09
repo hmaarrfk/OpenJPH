@@ -56,7 +56,7 @@ namespace ojph {
     && (defined(OJPH_ARCH_X86_64) || defined(OJPH_ARCH_I386))
     // hwy kernel (ojph_codestream_hwy.cpp); compiled for AVX2, so calls
     // must be gated on a run-time AVX2 check
-    void hwy_rev_convert16(const si16 *sp, si32 *dp, si32 shift, ui32 count);
+    void rev_convert16(const si16 *sp, si32 *dp, si32 shift, ui32 count);
     #define OJPH_TILE_USE_HWY
 #endif
 
@@ -468,7 +468,7 @@ namespace ojph {
           si32 shift = (si32)((si64)1 << (num_bits[comp_num] - 1));
 #ifdef OJPH_TILE_USE_HWY
           if (get_cpu_ext_level() >= X86_CPU_EXT_LEVEL_AVX2)
-            hwy_rev_convert16(sp, dp, shift, comp_width);
+            rev_convert16(sp, dp, shift, comp_width);
           else
 #endif
           for (ui32 i = comp_width; i > 0; --i)

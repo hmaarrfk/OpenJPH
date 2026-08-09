@@ -53,7 +53,7 @@ namespace ojph {
     //////////////////////////////////////////////////////////////////////////
     // sign-magnitude ui32 codeblock samples to a 16-bit line; the hwy
     // equivalent of rev_tx_from_cb16 (see ojph_codestream_gen.cpp)
-    void hwy_rev_tx_from_cb16(const ui32 *sp, si16 *dp, ui32 K_max,
+    void rev_tx_from_cb16(const ui32 *sp, si16 *dp, ui32 K_max,
                               ui32 count)
     {
       const int shift = (int)(31 - K_max);
@@ -91,7 +91,7 @@ namespace ojph {
     // slightly slower than the hand-written avx2_rev_tx_from_cb32, which
     // rounds count up to whole vectors instead of running a scalar tail;
     // kept for non-AVX2 targets and future re-evaluation
-    void hwy_rev_tx_from_cb32(const ui32 *sp, void *dp, ui32 K_max,
+    void rev_tx_from_cb32(const ui32 *sp, void *dp, ui32 K_max,
                               float delta, ui32 count)
     {
       ojph_unused(delta);
@@ -120,7 +120,7 @@ namespace ojph {
     // or-reduce the 8-entry max_val accumulator kept by the tx_to_cb32
     // kernels below (the generic kernels use entry 0 only, so this works
     // for them too); called once per codeblock
-    ui32 hwy_find_max_val32(ui32* address)
+    ui32 find_max_val32(ui32* address)
     {
       ui32 t = address[0];
       for (int i = 1; i < 8; ++i)
@@ -134,7 +134,7 @@ namespace ojph {
     // AVX2 vector width this file is compiled for; other widths fold to
     // a scalar in element 0, which every find_max_val32 handles too
     static inline
-    void hwy_fold_max_val(hn::Vec<hn::ScalableTag<si32> > tmax,
+    void fold_max_val(hn::Vec<hn::ScalableTag<si32> > tmax,
                           ui32 *max_val)
     {
       const hn::ScalableTag<si32> d;
@@ -161,7 +161,7 @@ namespace ojph {
     // gen_rev_tx_to_cb32.  Like the AVX2 implementation, the last
     // iteration loads and stores a whole vector (the buffers are padded)
     // and masks the extra lanes out of the accumulator only.
-    void hwy_rev_tx_to_cb32(const void *sp, ui32 *dp, ui32 K_max,
+    void rev_tx_to_cb32(const void *sp, ui32 *dp, ui32 K_max,
                             float delta_inv, ui32 count, ui32* max_val)
     {
       ojph_unused(delta_inv);
@@ -190,7 +190,7 @@ namespace ojph {
           hn::IfThenElseZero(hn::FirstN(d, count - i), val));
         hn::StoreU(hn::Or(val, sign), d, (si32*)dp + i);
       }
-      hwy_fold_max_val(tmax, max_val);
+      fold_max_val(tmax, max_val);
     }
 
     //////////////////////////////////////////////////////////////////////////
@@ -200,7 +200,7 @@ namespace ojph {
     // SSE2/AVX2 implementations; the generic implementation truncates).
     // NearestIntInRange is a bare cvt (values are in range by design,
     // as the other implementations also assume)
-    void hwy_irv_tx_to_cb32(const void *sp, ui32 *dp, ui32 K_max,
+    void irv_tx_to_cb32(const void *sp, ui32 *dp, ui32 K_max,
                             float delta_inv, ui32 count, ui32* max_val)
     {
       ojph_unused(K_max);
@@ -232,13 +232,13 @@ namespace ojph {
           hn::IfThenElseZero(hn::FirstN(d, count - i), val));
         hn::StoreU(hn::Or(val, sign), d, (si32*)dp + i);
       }
-      hwy_fold_max_val(tmax, max_val);
+      fold_max_val(tmax, max_val);
     }
 
     //////////////////////////////////////////////////////////////////////////
     // sign-magnitude ui32 codeblock samples to a dequantized float line;
     // the hwy equivalent of gen_irv_tx_from_cb32
-    void hwy_irv_tx_from_cb32(const ui32 *sp, void *dp, ui32 K_max,
+    void irv_tx_from_cb32(const ui32 *sp, void *dp, ui32 K_max,
                               float delta, ui32 count)
     {
       ojph_unused(K_max);
@@ -265,7 +265,7 @@ namespace ojph {
     //////////////////////////////////////////////////////////////////////////
     // widen a 16-bit component line to 32 bits, undoing the level shift;
     // the hwy equivalent of the scalar loop in tile::pull
-    void hwy_rev_convert16(const si16 *sp, si32 *dp, si32 shift, ui32 count)
+    void rev_convert16(const si16 *sp, si32 *dp, si32 shift, ui32 count)
     {
       const hn::ScalableTag<si32> d32;
       const hn::Rebind<si16, decltype(d32)> d16;

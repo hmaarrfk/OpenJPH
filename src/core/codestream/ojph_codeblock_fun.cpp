@@ -93,16 +93,16 @@ namespace ojph {
 
 #ifdef OJPH_ENABLE_HWY
     //////////////////////////////////////////////////////////////////////////
-    ui32  hwy_find_max_val32(ui32* address);
-    void  hwy_rev_tx_from_cb16(const ui32 *sp, si16 *dp, ui32 K_max,
+    ui32  find_max_val32(ui32* address);
+    void  rev_tx_from_cb16(const ui32 *sp, si16 *dp, ui32 K_max,
                                ui32 count);
-    void  hwy_rev_tx_from_cb32(const ui32 *sp, void *dp, ui32 K_max,
+    void  rev_tx_from_cb32(const ui32 *sp, void *dp, ui32 K_max,
                                float delta, ui32 count);
-    void  hwy_rev_tx_to_cb32(const void *sp, ui32 *dp, ui32 K_max,
+    void  rev_tx_to_cb32(const void *sp, ui32 *dp, ui32 K_max,
                              float delta_inv, ui32 count, ui32* max_val);
-    void  hwy_irv_tx_to_cb32(const void *sp, ui32 *dp, ui32 K_max,
+    void  irv_tx_to_cb32(const void *sp, ui32 *dp, ui32 K_max,
                              float delta_inv, ui32 count, ui32* max_val);
-    void  hwy_irv_tx_from_cb32(const ui32 *sp, void *dp, ui32 K_max,
+    void  irv_tx_from_cb32(const ui32 *sp, void *dp, ui32 K_max,
                                float delta, ui32 count);
 #endif
 
@@ -157,19 +157,20 @@ namespace ojph {
         // target enabled at compile time (AVX2), so they are gated on
         // the same run-time CPU level.
         if (get_cpu_ext_level() >= X86_CPU_EXT_LEVEL_AVX2) {
-          encode_cb32 = ojph_encode_codeblock_hwy;
-          bool result = initialize_block_encoder_tables_hwy();
+          encode_cb32 = ojph_encode_codeblock_simd;
+          bool result = initialize_block_encoder_tables_simd();
           assert(result); ojph_unused(result);
 
-          tx_from_cb16 = hwy_rev_tx_from_cb16;
+          tx_from_cb16 = rev_tx_from_cb16;
           // the hwy tx_to_cb32 kernels accumulate max_val as a vector,
-          // so pair them with the matching reduction
-          find_max_val32 = hwy_find_max_val32;
+          // so pair them with the matching reduction (qualified, because
+          // the member of the same name shadows the free function here)
+          find_max_val32 = local::find_max_val32;
           if (reversible)
-            tx_to_cb32 = hwy_rev_tx_to_cb32;
+            tx_to_cb32 = rev_tx_to_cb32;
           else {
-            tx_to_cb32 = hwy_irv_tx_to_cb32;
-            tx_from_cb32 = hwy_irv_tx_from_cb32;
+            tx_to_cb32 = irv_tx_to_cb32;
+            tx_from_cb32 = irv_tx_from_cb32;
           }
         }
       #endif // OJPH_ENABLE_HWY

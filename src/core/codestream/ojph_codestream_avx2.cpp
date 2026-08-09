@@ -48,7 +48,7 @@ namespace ojph {
 
     //////////////////////////////////////////////////////////////////////////
     // The one hand-written kernel kept in this file: it measured faster
-    // than its Highway equivalent (see hwy_rev_tx_from_cb32 in
+    // than its Highway equivalent (see rev_tx_from_cb32 in
     // ojph_codestream_hwy.cpp), because it rounds count up to whole
     // vectors instead of running a scalar tail.
     void avx2_rev_tx_from_cb32(const ui32 *sp, void *dp, ui32 K_max, 

@@ -36,7 +36,7 @@
 // Google Highway implementations of the reversible DWT functions.  This
 // translation unit is compiled for a single (static) Highway target,
 // selected at compile time from the compiler flags the build system sets
-// for it (see src/core/CMakeLists.txt); hwy_install_rev_transforms()
+// for it (see src/core/CMakeLists.txt); install_rev_transforms()
 // installs the functions only when the CPU supports that target.
 //
 // The functions here compute values identical to those of the generic
@@ -144,7 +144,7 @@ namespace ojph {
     // instantiation is a single tight loop.
     template <int CASE, bool SUB>
     static
-    void hwy_rev_vert_pass32(const si32* src1, const si32* src2, si32* dst,
+    void rev_vert_pass32(const si32* src1, const si32* src2, si32* dst,
                              ui32 repeat, si32 a, si32 b, ui8 e)
     {
       const hn::ScalableTag<si32> d;
@@ -179,7 +179,7 @@ namespace ojph {
     // One vertical lifting step of a whole-sample symmetric kernel on
     // 32-bit lines; the cases mirror those of gen_rev_vert_step32.
     static
-    void hwy_rev_vert_step32(const lifting_step* s, const si32* src1,
+    void rev_vert_step32(const lifting_step* s, const si32* src1,
                              const si32* src2, si32* dst, ui32 repeat,
                              bool synthesis)
     {
@@ -189,33 +189,33 @@ namespace ojph {
 
       if (a == 1) {
         if (synthesis)
-          hwy_rev_vert_pass32<0, true>(src1, src2, dst, repeat, a, b, e);
+          rev_vert_pass32<0, true>(src1, src2, dst, repeat, a, b, e);
         else
-          hwy_rev_vert_pass32<0, false>(src1, src2, dst, repeat, a, b, e);
+          rev_vert_pass32<0, false>(src1, src2, dst, repeat, a, b, e);
       }
       else if (a == -1 && b == 1 && e == 1) {
         if (synthesis)
-          hwy_rev_vert_pass32<1, false>(src1, src2, dst, repeat, a, b, e);
+          rev_vert_pass32<1, false>(src1, src2, dst, repeat, a, b, e);
         else
-          hwy_rev_vert_pass32<1, true>(src1, src2, dst, repeat, a, b, e);
+          rev_vert_pass32<1, true>(src1, src2, dst, repeat, a, b, e);
       }
       else if (a == -1) {
         if (synthesis)
-          hwy_rev_vert_pass32<2, true>(src1, src2, dst, repeat, a, b, e);
+          rev_vert_pass32<2, true>(src1, src2, dst, repeat, a, b, e);
         else
-          hwy_rev_vert_pass32<2, false>(src1, src2, dst, repeat, a, b, e);
+          rev_vert_pass32<2, false>(src1, src2, dst, repeat, a, b, e);
       }
       else {
         if (synthesis)
-          hwy_rev_vert_pass32<3, true>(src1, src2, dst, repeat, a, b, e);
+          rev_vert_pass32<3, true>(src1, src2, dst, repeat, a, b, e);
         else
-          hwy_rev_vert_pass32<3, false>(src1, src2, dst, repeat, a, b, e);
+          rev_vert_pass32<3, false>(src1, src2, dst, repeat, a, b, e);
       }
     }
 
     //////////////////////////////////////////////////////////////////////////
     static
-    void hwy_rev_vert_step(const lifting_step* s, const line_buf* sig,
+    void simd_rev_vert_step(const lifting_step* s, const line_buf* sig,
                            const line_buf* other, const line_buf* aug,
                            ui32 repeat, bool synthesis)
     {
@@ -239,7 +239,7 @@ namespace ojph {
         assert((sig == NULL || sig->flags & line_buf::LFT_32BIT) &&
                (other == NULL || other->flags & line_buf::LFT_32BIT) &&
                (aug == NULL || aug->flags & line_buf::LFT_32BIT));
-        hwy_rev_vert_step32(s, sig->i32, other->i32, aug->i32, repeat,
+        rev_vert_step32(s, sig->i32, other->i32, aug->i32, repeat,
                             synthesis);
       }
       else
@@ -254,7 +254,7 @@ namespace ojph {
     // identical to the generic implementation.
     template <typename T>
     static
-    bool hwy_rev_vert_step_one_tap_T(const lifting_step* s, const T* sp,
+    bool rev_vert_step_one_tap_T(const lifting_step* s, const T* sp,
                                      T* dst, ui32 repeat, bool synthesis)
     {
       const T a = (T)s->rev.Aatk;
@@ -296,7 +296,7 @@ namespace ojph {
 
     //////////////////////////////////////////////////////////////////////////
     static
-    void hwy_rev_vert_step_one_tap(const lifting_step* s,
+    void simd_rev_vert_step_one_tap(const lifting_step* s,
                                    const line_buf* src, const line_buf* aug,
                                    ui32 repeat, bool synthesis)
     {
@@ -304,13 +304,13 @@ namespace ojph {
       if (aug->flags & line_buf::LFT_16BIT)
       {
         assert(src == NULL || src->flags & line_buf::LFT_16BIT);
-        done = hwy_rev_vert_step_one_tap_T<si16>(s, src->i16, aug->i16,
+        done = rev_vert_step_one_tap_T<si16>(s, src->i16, aug->i16,
                                                  repeat, synthesis);
       }
       else if (aug->flags & line_buf::LFT_32BIT)
       {
         assert(src == NULL || src->flags & line_buf::LFT_32BIT);
-        done = hwy_rev_vert_step_one_tap_T<si32>(s, src->i32, aug->i32,
+        done = rev_vert_step_one_tap_T<si32>(s, src->i32, aug->i32,
                                                  repeat, synthesis);
       }
       if (!done)
@@ -329,7 +329,7 @@ namespace ojph {
     // Values are identical to the two-pass (deinterleave, then lift)
     // implementations.
     static
-    void hwy_rev13_horz_ana32(const si32* sp, si32* lp, si32* hp,
+    void rev13_horz_ana32(const si32* sp, si32* lp, si32* hp,
                               ui32 width, bool even)
     {
       const hn::ScalableTag<si32> d;
@@ -395,9 +395,9 @@ namespace ojph {
 
     //////////////////////////////////////////////////////////////////////////
     // Synthesis: apply the inverse 5/3 predict step and interleave into
-    // the output in a single pass; the inverse of hwy_rev13_horz_ana32.
+    // the output in a single pass; the inverse of rev13_horz_ana32.
     static
-    void hwy_rev13_horz_syn32(si32* dp, const si32* lp, const si32* hp,
+    void rev13_horz_syn32(si32* dp, const si32* lp, const si32* hp,
                               ui32 width, bool even)
     {
       const hn::ScalableTag<si32> d;
@@ -478,7 +478,7 @@ namespace ojph {
     // returns [prev[L-1], v[0], ..., v[L-2]], i.e. v shifted up one lane
     // with the last lane of prev shifted in
     static inline hn::Vec<hn::ScalableTag<si32> >
-    hwy_shift_in_prev(hn::Vec<hn::ScalableTag<si32> > v,
+    shift_in_prev(hn::Vec<hn::ScalableTag<si32> > v,
                       hn::Vec<hn::ScalableTag<si32> > prev)
     {
       const hn::ScalableTag<si32> d;
@@ -500,7 +500,7 @@ namespace ojph {
     // (lane 0 of the first block gets the boundary extension), so values
     // are identical to the two-pass implementations.
     static
-    void hwy_rev53_horz_ana32(const si32* sp, si32* lp, si32* hp,
+    void rev53_horz_ana32(const si32* sp, si32* lp, si32* hp,
                               ui32 width, bool even)
     {
       const hn::ScalableTag<si32> d;
@@ -535,7 +535,7 @@ namespace ojph {
             hn::LoadInterleaved2(d, sp + 2 * i, e0, o0);
             hn::LoadInterleaved2(d, sp + 2 * i + 2, e1, o1);
             h = hn::Sub(o0, hn::ShiftRight<1>(hn::Add(e0, e1)));
-            hm1 = hwy_shift_in_prev(h, prev);
+            hm1 = shift_in_prev(h, prev);
             l = hn::Add(e0,
               hn::ShiftRight<2>(hn::Add(hn::Add(hm1, h), two)));
             hn::StoreU(l, d, lp + i);
@@ -572,7 +572,7 @@ namespace ojph {
           hn::LoadInterleaved2(d, sp + 2 * i - 1, e0, o0);
           hn::LoadInterleaved2(d, sp + 2 * i + 1, e1, o1);
           auto h = hn::Sub(o0, hn::ShiftRight<1>(hn::Add(e0, e1)));
-          auto hm1 = hwy_shift_in_prev(h, prev);
+          auto hm1 = shift_in_prev(h, prev);
           auto l = hn::Add(e0,
             hn::ShiftRight<2>(hn::Add(hn::Add(hm1, h), two)));
           hn::StoreU(l, d, lp + i - 1);
@@ -596,11 +596,11 @@ namespace ojph {
     //////////////////////////////////////////////////////////////////////////
     // Synthesis: apply the inverse 5/3 update and predict steps and
     // interleave into the output in a single pass; the inverse of
-    // hwy_rev53_horz_ana32.  The updated low-pass values L' are
+    // rev53_horz_ana32.  The updated low-pass values L' are
     // recomputed where a lane needs its neighbour, so values are
     // identical to the two-pass implementations.
     static
-    void hwy_rev53_horz_syn32(si32* dp, const si32* lp, const si32* hp,
+    void rev53_horz_syn32(si32* dp, const si32* lp, const si32* hp,
                               ui32 width, bool even)
     {
       const hn::ScalableTag<si32> d;
@@ -714,12 +714,12 @@ namespace ojph {
 
     //////////////////////////////////////////////////////////////////////////
     // One horizontal lifting pass; the two taps for dp[i] are sp[i - 1]
-    // and sp[i], and CASE/SUB are as in hwy_rev_vert_pass32.  The loop
+    // and sp[i], and CASE/SUB are as in rev_vert_pass32.  The loop
     // overruns count to whole vectors; the extension slots and the line
     // padding absorb the overrun (as in the SSE2/AVX2 implementations).
     template <int CASE, bool SUB>
     static
-    void hwy_rev_horz_pass32(const si32* sp, si32* dp, ui32 count,
+    void rev_horz_pass32(const si32* sp, si32* dp, ui32 count,
                              si32 a, si32 b, ui8 e)
     {
       const hn::ScalableTag<si32> d;
@@ -749,7 +749,7 @@ namespace ojph {
     //////////////////////////////////////////////////////////////////////////
     // Analysis; values identical to gen_rev_horz_ana32
     static
-    void hwy_rev_horz_ws_ana32(const param_atk* atk, const line_buf* ldst,
+    void rev_horz_ws_ana32(const param_atk* atk, const line_buf* ldst,
                                const line_buf* hdst, const line_buf* src,
                                ui32 width, bool even)
     {
@@ -788,13 +788,13 @@ namespace ojph {
         // lifting step
         const si32* sp = lp + (even ? 1 : 0);
         if (a == 1)
-          hwy_rev_horz_pass32<0, false>(sp, hp, h_width, a, b, e);
+          rev_horz_pass32<0, false>(sp, hp, h_width, a, b, e);
         else if (a == -1 && b == 1 && e == 1)
-          hwy_rev_horz_pass32<1, true>(sp, hp, h_width, a, b, e);
+          rev_horz_pass32<1, true>(sp, hp, h_width, a, b, e);
         else if (a == -1)
-          hwy_rev_horz_pass32<2, false>(sp, hp, h_width, a, b, e);
+          rev_horz_pass32<2, false>(sp, hp, h_width, a, b, e);
         else
-          hwy_rev_horz_pass32<3, false>(sp, hp, h_width, a, b, e);
+          rev_horz_pass32<3, false>(sp, hp, h_width, a, b, e);
 
         // swap buffers
         si32* t = lp; lp = hp; hp = t;
@@ -806,7 +806,7 @@ namespace ojph {
     //////////////////////////////////////////////////////////////////////////
     // Synthesis; values identical to gen_rev_horz_syn32
     static
-    void hwy_rev_horz_ws_syn32(const param_atk* atk, const line_buf* dst,
+    void rev_horz_ws_syn32(const param_atk* atk, const line_buf* dst,
                                const line_buf* lsrc, const line_buf* hsrc,
                                ui32 width, bool even)
     {
@@ -831,13 +831,13 @@ namespace ojph {
         // lifting step
         const si32* sp = oth + (ev ? 0 : 1);
         if (a == 1)
-          hwy_rev_horz_pass32<0, true>(sp, aug, aug_width, a, b, e);
+          rev_horz_pass32<0, true>(sp, aug, aug_width, a, b, e);
         else if (a == -1 && b == 1 && e == 1)
-          hwy_rev_horz_pass32<1, false>(sp, aug, aug_width, a, b, e);
+          rev_horz_pass32<1, false>(sp, aug, aug_width, a, b, e);
         else if (a == -1)
-          hwy_rev_horz_pass32<2, true>(sp, aug, aug_width, a, b, e);
+          rev_horz_pass32<2, true>(sp, aug, aug_width, a, b, e);
         else
-          hwy_rev_horz_pass32<3, true>(sp, aug, aug_width, a, b, e);
+          rev_horz_pass32<3, true>(sp, aug, aug_width, a, b, e);
 
         // swap buffers
         si32* t = aug; aug = oth; oth = t;
@@ -862,18 +862,18 @@ namespace ojph {
 
     //////////////////////////////////////////////////////////////////////////
     static
-    void hwy_rev_horz_ana(const param_atk* atk, const line_buf* ldst,
+    void simd_rev_horz_ana(const param_atk* atk, const line_buf* ldst,
                           const line_buf* hdst, const line_buf* src,
                           ui32 width, bool even)
     {
       if (width > 1 && (src->flags & line_buf::LFT_32BIT))
       {
         if (is_rev13_kernel(atk))
-          hwy_rev13_horz_ana32(src->i32, ldst->i32, hdst->i32, width, even);
+          rev13_horz_ana32(src->i32, ldst->i32, hdst->i32, width, even);
         else if (is_rev53_kernel(atk))
-          hwy_rev53_horz_ana32(src->i32, ldst->i32, hdst->i32, width, even);
+          rev53_horz_ana32(src->i32, ldst->i32, hdst->i32, width, even);
         else
-          hwy_rev_horz_ws_ana32(atk, ldst, hdst, src, width, even);
+          rev_horz_ws_ana32(atk, ldst, hdst, src, width, even);
       }
       else
         fb_rev_horz_ana(atk, ldst, hdst, src, width, even);
@@ -881,18 +881,18 @@ namespace ojph {
 
     //////////////////////////////////////////////////////////////////////////
     static
-    void hwy_rev_horz_syn(const param_atk* atk, const line_buf* dst,
+    void simd_rev_horz_syn(const param_atk* atk, const line_buf* dst,
                           const line_buf* lsrc, const line_buf* hsrc,
                           ui32 width, bool even)
     {
       if (width > 1 && (dst->flags & line_buf::LFT_32BIT))
       {
         if (is_rev13_kernel(atk))
-          hwy_rev13_horz_syn32(dst->i32, lsrc->i32, hsrc->i32, width, even);
+          rev13_horz_syn32(dst->i32, lsrc->i32, hsrc->i32, width, even);
         else if (is_rev53_kernel(atk))
-          hwy_rev53_horz_syn32(dst->i32, lsrc->i32, hsrc->i32, width, even);
+          rev53_horz_syn32(dst->i32, lsrc->i32, hsrc->i32, width, even);
         else
-          hwy_rev_horz_ws_syn32(atk, dst, lsrc, hsrc, width, even);
+          rev_horz_ws_syn32(atk, dst, lsrc, hsrc, width, even);
       }
       else
         fb_rev_horz_syn(atk, dst, lsrc, hsrc, width, even);
@@ -908,7 +908,7 @@ namespace ojph {
     // Analysis; values identical to gen_rev_horz_ana_prev_T.
     template <typename T>
     static
-    void hwy_rev_horz_ana_prev_T(T* lp, T* hp, const T* sp,
+    void rev_horz_ana_prev_T(T* lp, T* hp, const T* sp,
                                  ui32 width, bool even)
     {
       const hn::ScalableTag<T> d;
@@ -959,7 +959,7 @@ namespace ojph {
     // Synthesis; values identical to gen_rev_horz_syn_prev_T.
     template <typename T>
     static
-    void hwy_rev_horz_syn_prev_T(T* dp, const T* lp, const T* hp,
+    void rev_horz_syn_prev_T(T* dp, const T* lp, const T* hp,
                                  ui32 width, bool even)
     {
       const hn::ScalableTag<T> d;
@@ -1007,7 +1007,7 @@ namespace ojph {
 
     //////////////////////////////////////////////////////////////////////////
     static
-    void hwy_rev_horz_ana_arb(const param_atk* atk, const line_buf* ldst,
+    void simd_rev_horz_ana_arb(const param_atk* atk, const line_buf* ldst,
                               const line_buf* hdst, const line_buf* src,
                               ui32 width, bool even)
     {
@@ -1015,13 +1015,13 @@ namespace ojph {
       {
         if (src->flags & line_buf::LFT_16BIT)
         {
-          hwy_rev_horz_ana_prev_T<si16>(ldst->i16, hdst->i16, src->i16,
+          rev_horz_ana_prev_T<si16>(ldst->i16, hdst->i16, src->i16,
                                         width, even);
           return;
         }
         else if (src->flags & line_buf::LFT_32BIT)
         {
-          hwy_rev_horz_ana_prev_T<si32>(ldst->i32, hdst->i32, src->i32,
+          rev_horz_ana_prev_T<si32>(ldst->i32, hdst->i32, src->i32,
                                         width, even);
           return;
         }
@@ -1031,7 +1031,7 @@ namespace ojph {
 
     //////////////////////////////////////////////////////////////////////////
     static
-    void hwy_rev_horz_syn_arb(const param_atk* atk, const line_buf* dst,
+    void simd_rev_horz_syn_arb(const param_atk* atk, const line_buf* dst,
                               const line_buf* lsrc, const line_buf* hsrc,
                               ui32 width, bool even)
     {
@@ -1039,13 +1039,13 @@ namespace ojph {
       {
         if (dst->flags & line_buf::LFT_16BIT)
         {
-          hwy_rev_horz_syn_prev_T<si16>(dst->i16, lsrc->i16, hsrc->i16,
+          rev_horz_syn_prev_T<si16>(dst->i16, lsrc->i16, hsrc->i16,
                                         width, even);
           return;
         }
         else if (dst->flags & line_buf::LFT_32BIT)
         {
-          hwy_rev_horz_syn_prev_T<si32>(dst->i32, lsrc->i32, hsrc->i32,
+          rev_horz_syn_prev_T<si32>(dst->i32, lsrc->i32, hsrc->i32,
                                         width, even);
           return;
         }
@@ -1062,7 +1062,7 @@ namespace ojph {
     //////////////////////////////////////////////////////////////////////////
     // multiply a line by a constant factor; like the lifting loops below,
     // the loop overruns the line end by less than one vector
-    static inline void hwy_multiply_const(float* p, float f, ui32 width)
+    static inline void multiply_const(float* p, float f, ui32 width)
     {
       const hn::ScalableTag<float> d;
       const ui32 L = (ui32)hn::Lanes(d);
@@ -1077,7 +1077,7 @@ namespace ojph {
     // not fused, keeping results identical to the generic and SSE/AVX
     // implementations)
     static
-    void hwy_irv_vert_step(const lifting_step* s, const line_buf* sig,
+    void simd_irv_vert_step(const lifting_step* s, const line_buf* sig,
                            const line_buf* other, const line_buf* aug,
                            ui32 repeat, bool synthesis)
     {
@@ -1103,16 +1103,16 @@ namespace ojph {
 
     //////////////////////////////////////////////////////////////////////////
     static
-    void hwy_irv_vert_times_K(float K, const line_buf* aug, ui32 repeat)
+    void simd_irv_vert_times_K(float K, const line_buf* aug, ui32 repeat)
     {
-      hwy_multiply_const(aug->f32, K, repeat);
+      multiply_const(aug->f32, K, repeat);
     }
 
     //////////////////////////////////////////////////////////////////////////
     // Analysis; the structure mirrors gen_irv_horz_ana (deinterleave, one
     // pass per lifting step, then scale by K); values are identical
     static
-    void hwy_irv_horz_ana(const param_atk* atk, const line_buf* ldst,
+    void simd_irv_horz_ana(const param_atk* atk, const line_buf* ldst,
                           const line_buf* hdst, const line_buf* src,
                           ui32 width, bool even)
     {
@@ -1169,8 +1169,8 @@ namespace ojph {
 
         { // multiply by K or 1/K
           float K = atk->get_K();
-          hwy_multiply_const(lp, 1.0f / K, l_width);
-          hwy_multiply_const(hp, K, h_width);
+          multiply_const(lp, 1.0f / K, l_width);
+          multiply_const(hp, K, h_width);
         }
       }
       else {
@@ -1182,10 +1182,10 @@ namespace ojph {
     }
 
     //////////////////////////////////////////////////////////////////////////
-    // Synthesis; the inverse of hwy_irv_horz_ana, mirroring
+    // Synthesis; the inverse of simd_irv_horz_ana, mirroring
     // gen_irv_horz_syn
     static
-    void hwy_irv_horz_syn(const param_atk* atk, const line_buf* dst,
+    void simd_irv_horz_syn(const param_atk* atk, const line_buf* dst,
                           const line_buf* lsrc, const line_buf* hsrc,
                           ui32 width, bool even)
     {
@@ -1200,8 +1200,8 @@ namespace ojph {
 
         { // multiply by K or 1/K
           float K = atk->get_K();
-          hwy_multiply_const(aug, K, aug_width);
-          hwy_multiply_const(oth, 1.0f / K, oth_width);
+          multiply_const(aug, K, aug_width);
+          multiply_const(oth, 1.0f / K, oth_width);
         }
 
         ui32 num_steps = atk->get_num_steps();
@@ -1256,7 +1256,7 @@ namespace ojph {
     //////////////////////////////////////////////////////////////////////////
     // True when the CPU supports the Highway target this file was
     // compiled for (targets are bitflags; smaller is newer)
-    static inline bool hwy_target_supported()
+    static inline bool static_target_supported()
     {
 #if defined(OJPH_ARCH_X86_64) || defined(OJPH_ARCH_I386)
   #if HWY_STATIC_TARGET <= HWY_AVX3
@@ -1274,22 +1274,22 @@ namespace ojph {
     }
 
     //////////////////////////////////////////////////////////////////////////
-    void hwy_install_irv_transforms()
+    void install_irv_transforms()
     {
-      if (!hwy_target_supported())
+      if (!static_target_supported())
         return;
-      irv_vert_step    = hwy_irv_vert_step;
-      irv_vert_times_K = hwy_irv_vert_times_K;
-      irv_horz_ana     = hwy_irv_horz_ana;
-      irv_horz_syn     = hwy_irv_horz_syn;
+      irv_vert_step    = simd_irv_vert_step;
+      irv_vert_times_K = simd_irv_vert_times_K;
+      irv_horz_ana     = simd_irv_horz_ana;
+      irv_horz_syn     = simd_irv_horz_syn;
     }
 
     //////////////////////////////////////////////////////////////////////////
-    void hwy_install_rev_transforms()
+    void install_rev_transforms()
     {
       // this file is compiled for a fixed Highway target; install only
       // when the CPU supports it
-      if (!hwy_target_supported())
+      if (!static_target_supported())
         return;
       fb_rev_vert_step         = rev_vert_step;
       fb_rev_horz_ana          = rev_horz_ana;
@@ -1298,12 +1298,12 @@ namespace ojph {
       fb_rev_horz_ana_arb      = rev_horz_ana_arb;
       fb_rev_horz_syn_arb      = rev_horz_syn_arb;
 
-      rev_vert_step            = hwy_rev_vert_step;
-      rev_horz_ana             = hwy_rev_horz_ana;
-      rev_horz_syn             = hwy_rev_horz_syn;
-      rev_vert_step_one_tap    = hwy_rev_vert_step_one_tap;
-      rev_horz_ana_arb         = hwy_rev_horz_ana_arb;
-      rev_horz_syn_arb         = hwy_rev_horz_syn_arb;
+      rev_vert_step            = simd_rev_vert_step;
+      rev_horz_ana             = simd_rev_horz_ana;
+      rev_horz_syn             = simd_rev_horz_syn;
+      rev_vert_step_one_tap    = simd_rev_vert_step_one_tap;
+      rev_horz_ana_arb         = simd_rev_horz_ana_arb;
+      rev_horz_syn_arb         = simd_rev_horz_syn_arb;
     }
 
   } // !local namespace

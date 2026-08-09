@@ -285,7 +285,7 @@ namespace ojph {
     }
 
     /////////////////////////////////////////////////////////////////////////
-    bool initialize_block_encoder_tables_hwy() {
+    bool initialize_block_encoder_tables_simd() {
       static bool tables_initialized = false;
       static std::once_flag tables_initialized_flag;
       std::call_once(tables_initialized_flag, []() {
@@ -1283,7 +1283,7 @@ namespace ojph {
       }
     }
 
-    void ojph_encode_codeblock_hwy(ui32* buf, ui32 missing_msbs,
+    void ojph_encode_codeblock_simd(ui32* buf, ui32 missing_msbs,
                                    ui32 num_passes, ui32 _width, ui32 height,
                                    ui32 stride, ui32* lengths,
                                    ojph::mem_elastic_allocator *elastic,
