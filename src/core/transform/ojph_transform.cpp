@@ -208,8 +208,10 @@ namespace ojph {
     #ifdef OJPH_ENABLE_HWY
         // Google Highway implementations; this replaces some of the
         // reversible transform functions selected above, keeping the
-        // replaced functions as fallbacks for the cases it does not handle.
+        // replaced functions as fallbacks for the cases it does not handle,
+        // and all of the irreversible ones.
         hwy_install_rev_transforms();
+        hwy_install_irv_transforms();
     #endif
 
   #endif // !OJPH_DISABLE_SIMD

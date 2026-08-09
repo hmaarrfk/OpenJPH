@@ -129,6 +129,11 @@ namespace ojph {
     // compiled for; the functions selected before the call are kept as
     // fallbacks for the cases the Highway implementations do not handle.
     void hwy_install_rev_transforms();
+
+    //////////////////////////////////////////////////////////////////////////
+    // Same, for the irreversible (float) transform function pointers;
+    // these handle all cases, so no fallbacks are kept.
+    void hwy_install_irv_transforms();
 #endif // OJPH_ENABLE_HWY
 
     //////////////////////////////////////////////////////////////////////////

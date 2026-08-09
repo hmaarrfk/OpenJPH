@@ -637,22 +637,243 @@ namespace ojph {
     }
 
     //////////////////////////////////////////////////////////////////////////
-    void hwy_install_rev_transforms()
+    //
+    //           Irreversible (9/7 float) transform functions
+    //
+    //////////////////////////////////////////////////////////////////////////
+
+    //////////////////////////////////////////////////////////////////////////
+    // multiply a line by a constant factor; like the lifting loops below,
+    // the loop overruns the line end by less than one vector
+    static inline void hwy_multiply_const(float* p, float f, ui32 width)
+    {
+      const hn::ScalableTag<float> d;
+      const ui32 L = (ui32)hn::Lanes(d);
+      const auto vf = hn::Set(d, f);
+      for (ui32 i = 0; i < width; i += L)
+        hn::StoreU(hn::Mul(vf, hn::LoadU(d, p + i)), d, p + i);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    // One vertical lifting step; values identical to gen_irv_vert_step
+    // (this file is compiled with -ffp-contract=off, so Mul and Add are
+    // not fused, keeping results identical to the generic and SSE/AVX
+    // implementations)
+    static
+    void hwy_irv_vert_step(const lifting_step* s, const line_buf* sig,
+                           const line_buf* other, const line_buf* aug,
+                           ui32 repeat, bool synthesis)
+    {
+      float a = s->irv.Aatk;
+      if (synthesis)
+        a = -a;
+
+      const hn::ScalableTag<float> d;
+      const ui32 L = (ui32)hn::Lanes(d);
+      const auto va = hn::Set(d, a);
+
+      float* dst = aug->f32;
+      const float* src1 = sig->f32, * src2 = other->f32;
+      for (ui32 i = 0; i < repeat; i += L)
+      {
+        auto s1 = hn::LoadU(d, src1 + i);
+        auto s2 = hn::LoadU(d, src2 + i);
+        auto dv = hn::LoadU(d, dst + i);
+        dv = hn::Add(dv, hn::Mul(va, hn::Add(s1, s2)));
+        hn::StoreU(dv, d, dst + i);
+      }
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    static
+    void hwy_irv_vert_times_K(float K, const line_buf* aug, ui32 repeat)
+    {
+      hwy_multiply_const(aug->f32, K, repeat);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    // Analysis; the structure mirrors gen_irv_horz_ana (deinterleave, one
+    // pass per lifting step, then scale by K); values are identical
+    static
+    void hwy_irv_horz_ana(const param_atk* atk, const line_buf* ldst,
+                          const line_buf* hdst, const line_buf* src,
+                          ui32 width, bool even)
+    {
+      if (width > 1)
+      {
+        const hn::ScalableTag<float> d;
+        const ui32 L = (ui32)hn::Lanes(d);
+
+        // split src into ldst and hdst
+        {
+          float* dpl = even ? ldst->f32 : hdst->f32;
+          float* dph = even ? hdst->f32 : ldst->f32;
+          const float* sp = src->f32;
+          hn::Vec<hn::ScalableTag<float> > ev, od;
+          const ui32 half = (width + 1) >> 1;
+          for (ui32 i = 0; i < half; i += L)
+          {
+            hn::LoadInterleaved2(d, sp + 2 * i, ev, od);
+            hn::StoreU(ev, d, dpl + i);
+            hn::StoreU(od, d, dph + i);
+          }
+        }
+
+        // the actual horizontal transform
+        float* hp = hdst->f32, * lp = ldst->f32;
+        ui32 l_width = (width + (even ? 1 : 0)) >> 1;  // low pass
+        ui32 h_width = (width + (even ? 0 : 1)) >> 1;  // high pass
+        ui32 num_steps = atk->get_num_steps();
+        for (ui32 j = num_steps; j > 0; --j)
+        {
+          const lifting_step* s = atk->get_step(j - 1);
+          const auto va = hn::Set(d, s->irv.Aatk);
+
+          // extension
+          lp[-1] = lp[0];
+          lp[l_width] = lp[l_width - 1];
+          // lifting step
+          const float* sp = lp + (even ? 1 : 0);
+          float* dp = hp;
+          for (ui32 i = 0; i < h_width; i += L)
+          {
+            auto m = hn::LoadU(d, sp + i - 1);
+            auto n = hn::LoadU(d, sp + i);
+            auto p = hn::LoadU(d, dp + i);
+            p = hn::Add(p, hn::Mul(va, hn::Add(m, n)));
+            hn::StoreU(p, d, dp + i);
+          }
+
+          // swap buffers
+          float* t = lp; lp = hp; hp = t;
+          even = !even;
+          ui32 w = l_width; l_width = h_width; h_width = w;
+        }
+
+        { // multiply by K or 1/K
+          float K = atk->get_K();
+          hwy_multiply_const(lp, 1.0f / K, l_width);
+          hwy_multiply_const(hp, K, h_width);
+        }
+      }
+      else {
+        if (even)
+          ldst->f32[0] = src->f32[0];
+        else
+          hdst->f32[0] = src->f32[0] * 2.0f;
+      }
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    // Synthesis; the inverse of hwy_irv_horz_ana, mirroring
+    // gen_irv_horz_syn
+    static
+    void hwy_irv_horz_syn(const param_atk* atk, const line_buf* dst,
+                          const line_buf* lsrc, const line_buf* hsrc,
+                          ui32 width, bool even)
+    {
+      if (width > 1)
+      {
+        const hn::ScalableTag<float> d;
+        const ui32 L = (ui32)hn::Lanes(d);
+        bool ev = even;
+        float* oth = hsrc->f32, * aug = lsrc->f32;
+        ui32 aug_width = (width + (even ? 1 : 0)) >> 1;  // low pass
+        ui32 oth_width = (width + (even ? 0 : 1)) >> 1;  // high pass
+
+        { // multiply by K or 1/K
+          float K = atk->get_K();
+          hwy_multiply_const(aug, K, aug_width);
+          hwy_multiply_const(oth, 1.0f / K, oth_width);
+        }
+
+        ui32 num_steps = atk->get_num_steps();
+        for (ui32 j = 0; j < num_steps; ++j)
+        {
+          const lifting_step* s = atk->get_step(j);
+          const auto va = hn::Set(d, s->irv.Aatk);
+
+          // extension
+          oth[-1] = oth[0];
+          oth[oth_width] = oth[oth_width - 1];
+          // lifting step
+          const float* sp = oth + (ev ? 0 : 1);
+          float* dp = aug;
+          for (ui32 i = 0; i < aug_width; i += L)
+          {
+            auto m = hn::LoadU(d, sp + i - 1);
+            auto n = hn::LoadU(d, sp + i);
+            auto p = hn::LoadU(d, dp + i);
+            p = hn::Sub(p, hn::Mul(va, hn::Add(m, n)));
+            hn::StoreU(p, d, dp + i);
+          }
+
+          // swap buffers
+          float* t = aug; aug = oth; oth = t;
+          ev = !ev;
+          ui32 w = aug_width; aug_width = oth_width; oth_width = w;
+        }
+
+        // combine both lsrc and hsrc into dst
+        {
+          float* dp = dst->f32;
+          const float* spl = even ? lsrc->f32 : hsrc->f32;
+          const float* sph = even ? hsrc->f32 : lsrc->f32;
+          const ui32 half = (width + 1) >> 1;
+          for (ui32 i = 0; i < half; i += L)
+          {
+            auto l = hn::LoadU(d, spl + i);
+            auto h = hn::LoadU(d, sph + i);
+            hn::StoreInterleaved2(l, h, d, dp + 2 * i);
+          }
+        }
+      }
+      else {
+        if (even)
+          dst->f32[0] = lsrc->f32[0];
+        else
+          dst->f32[0] = hsrc->f32[0] * 0.5f;
+      }
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    // True when the CPU supports the Highway target this file was
+    // compiled for (targets are bitflags; smaller is newer)
+    static inline bool hwy_target_supported()
     {
 #if defined(OJPH_ARCH_X86_64) || defined(OJPH_ARCH_I386)
-      // this file is compiled for a fixed Highway target; install only
-      // when the CPU supports it (targets are bitflags; smaller is newer)
   #if HWY_STATIC_TARGET <= HWY_AVX3
-      if (get_cpu_ext_level() < X86_CPU_EXT_LEVEL_AVX512)
-        return;
+      return get_cpu_ext_level() >= X86_CPU_EXT_LEVEL_AVX512;
   #elif HWY_STATIC_TARGET <= HWY_AVX2
-      if (get_cpu_ext_level() < X86_CPU_EXT_LEVEL_AVX2FMA)
-        return;
+      return get_cpu_ext_level() >= X86_CPU_EXT_LEVEL_AVX2FMA;
   #elif HWY_STATIC_TARGET <= HWY_SSE4
-      if (get_cpu_ext_level() < X86_CPU_EXT_LEVEL_SSE42)
-        return;
+      return get_cpu_ext_level() >= X86_CPU_EXT_LEVEL_SSE42;
+  #else
+      return true;
   #endif
+#else
+      return true;
 #endif
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    void hwy_install_irv_transforms()
+    {
+      if (!hwy_target_supported())
+        return;
+      irv_vert_step    = hwy_irv_vert_step;
+      irv_vert_times_K = hwy_irv_vert_times_K;
+      irv_horz_ana     = hwy_irv_horz_ana;
+      irv_horz_syn     = hwy_irv_horz_syn;
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    void hwy_install_rev_transforms()
+    {
+      // this file is compiled for a fixed Highway target; install only
+      // when the CPU supports it
+      if (!hwy_target_supported())
+        return;
       fb_rev_vert_step         = rev_vert_step;
       fb_rev_horz_ana          = rev_horz_ana;
       fb_rev_horz_syn          = rev_horz_syn;

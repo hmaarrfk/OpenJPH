@@ -187,9 +187,11 @@ if (OJPH_ENABLE_HWY AND (NOT OJPH_DISABLE_SIMD) AND (NOT EMSCRIPTEN)
       set_source_files_properties(transform/ojph_transform_hwy.cpp
         PROPERTIES COMPILE_FLAGS "/arch:AVX2")
     else()
+      # -ffp-contract=off keeps the float (irv) kernels from fusing
+      # mul+add into fma, so their values match the generic implementation
       set_source_files_properties(transform/ojph_transform_hwy.cpp
         PROPERTIES COMPILE_FLAGS
-        "-mavx2 -maes -mpclmul -mbmi -mbmi2 -mfma -mf16c")
+        "-mavx2 -maes -mpclmul -mbmi -mbmi2 -mfma -mf16c -ffp-contract=off")
     endif()
   endif()
 endif()
