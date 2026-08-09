@@ -220,26 +220,28 @@ namespace ojph {
       const auto vdelta_inv = hn::Set(df, delta_inv);
       auto tmax = hn::Zero(d);
       const float *p = (const float*)sp;
+      si32 *q = (si32*)dp;
 
-      ui32 i = 0;
-      for ( ; i + N <= count; i += (ui32)N)
+      // pointer-bumping loop; gcc compiles it faster than an indexed one
+      ui32 rem = count;
+      for ( ; rem >= N; rem -= (ui32)N, p += N, q += N)
       {
-        auto vf = hn::Mul(hn::LoadU(df, p + i), vdelta_inv);
+        auto vf = hn::Mul(hn::LoadU(df, p), vdelta_inv);
         auto t = nearest_int(d, vf);
         auto sign = hn::And(t, sign_mask);
         auto val = hn::Abs(t);
         tmax = hn::Or(tmax, val);
-        hn::StoreU(hn::Or(val, sign), d, (si32*)dp + i);
+        hn::StoreU(hn::Or(val, sign), d, q);
       }
-      if (i < count)
+      if (rem)
       {
-        auto vf = hn::Mul(hn::LoadU(df, p + i), vdelta_inv);
+        auto vf = hn::Mul(hn::LoadU(df, p), vdelta_inv);
         auto t = nearest_int(d, vf);
         auto sign = hn::And(t, sign_mask);
         auto val = hn::Abs(t);
         tmax = hn::Or(tmax,
-          hn::IfThenElseZero(hn::FirstN(d, count - i), val));
-        hn::StoreU(hn::Or(val, sign), d, (si32*)dp + i);
+          hn::IfThenElseZero(hn::FirstN(d, rem), val));
+        hn::StoreU(hn::Or(val, sign), d, q);
       }
       fold_max_val(tmax, max_val);
     }
