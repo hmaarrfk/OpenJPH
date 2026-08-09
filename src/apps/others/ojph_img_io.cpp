@@ -477,7 +477,6 @@ namespace ojph {
 
     #if (defined(OJPH_ARCH_X86_64) || defined(OJPH_ARCH_I386))
 
-      #ifndef OJPH_DISABLE_SSE4
         if (get_cpu_ext_level() >= X86_CPU_EXT_LEVEL_SSE41) {
           if (bytes_per_sample == 1) {
             if (num_components == 1)
@@ -492,9 +491,7 @@ namespace ojph {
               converter = sse41_cvrt_32b3c_to_16ub3c_be;
           }
         }
-      #endif // !OJPH_DISABLE_SSE4
 
-      #ifndef OJPH_DISABLE_AVX2
         if (get_cpu_ext_level() >= X86_CPU_EXT_LEVEL_AVX2) {
           if (bytes_per_sample == 1) {
             if (num_components == 1)
@@ -509,7 +506,6 @@ namespace ojph {
               { } // did not find an implementation better than sse41
           }
         }
-      #endif // !OJPH_DISABLE_AVX2
 
     #elif defined(OJPH_ARCH_ARM)
 

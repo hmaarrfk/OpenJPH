@@ -25,14 +25,10 @@ else()
       OR ("${OJPH_TARGET_ARCH}" MATCHES "OJPH_ARCH_I386")
       OR MULTI_GEN_X86_64)
 
-      if (NOT OJPH_DISABLE_SSE4)
-        list(APPEND SOURCES ${OJPH_IMG_IO_SSE4})
-        source_group("others" FILES ${OJPH_IMG_IO_SSE4})
-      endif()
-      if (NOT OJPH_DISABLE_AVX2)
-        list(APPEND SOURCES ${OJPH_IMG_IO_AVX2})
-        source_group("others" FILES ${OJPH_IMG_IO_AVX2})
-      endif()
+      list(APPEND SOURCES ${OJPH_IMG_IO_SSE4})
+      source_group("others" FILES ${OJPH_IMG_IO_SSE4})
+      list(APPEND SOURCES ${OJPH_IMG_IO_AVX2})
+      source_group("others" FILES ${OJPH_IMG_IO_AVX2})
 
       # Set compilation flags
       if (MSVC)
