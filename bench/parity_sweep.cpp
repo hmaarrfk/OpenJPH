@@ -3,11 +3,20 @@
 // this against two builds and comparing the directories verifies that
 // the builds produce byte-identical codestreams on all the edge cases
 // (odd widths and heights, odd offsets, tiny images).
+//
+// When compiled with -DPARITY_FORCE_HWY (and linked against libhwy), an
+// optional second argument forces a Highway dispatch target by
+// disabling everything better (sse4, avx2, avx3, avx3_dl, avx3_zen4,
+// avx3_spr), so one build can be checked target by target.
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
+
+#ifdef PARITY_FORCE_HWY
+#include <hwy/targets.h>
+#endif
 
 #include "ojph_file.h"
 #include "ojph_mem.h"
@@ -23,8 +32,35 @@ static ojph::ui32 rng()
 
 int main(int argc, char** argv)
 {
-  if (argc < 2) { printf("usage: parity_sweep <outdir>\n"); return 1; }
+  if (argc < 2)
+  { printf("usage: parity_sweep <outdir> [target]\n"); return 1; }
   std::string outdir = argv[1];
+
+#ifdef PARITY_FORCE_HWY
+  if (argc > 2)
+  {
+    const std::string t = argv[2];
+    int64_t bit = 0;
+    if (t == "sse4")           bit = HWY_SSE4;
+    else if (t == "avx2")      bit = HWY_AVX2;
+    else if (t == "avx3")      bit = HWY_AVX3;
+    else if (t == "avx3_dl")   bit = HWY_AVX3_DL;
+    else if (t == "avx3_zen4") bit = HWY_AVX3_ZEN4;
+    else if (t == "avx3_spr")  bit = HWY_AVX3_SPR;
+    else if (t != "native")
+    { printf("unknown target %s\n", t.c_str()); return 1; }
+    if (bit != 0)
+    {
+      hwy::DisableTargets(bit - 1); // disable everything better
+      const int64_t sup = hwy::SupportedTargets();
+      // narrow hwy's chosen dispatch target to the masked set (see
+      // target_matrix.cpp)
+      hwy::GetChosenTarget().Update(sup);
+      if ((sup & bit) == 0)
+      { printf("%s: not supported on this CPU\n", t.c_str()); return 2; }
+    }
+  }
+#endif
 
   const ojph::ui32 sizes[] = { 1, 2, 3, 4, 5, 7, 8, 15, 16, 17,
                                31, 32, 33, 63, 64, 127, 129 };
