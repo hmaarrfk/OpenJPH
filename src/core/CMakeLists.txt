@@ -51,8 +51,9 @@ if(NOT EMSCRIPTEN)
         source_group("codestream" FILES ${CODESTREAM_HWY})
       endif()
 
-      # Set compilation flags
-      if (MSVC)
+      # Set compilation flags.  OJPH_COMPILER_MSVC_TRUE is cl.exe only;
+      # clang-cl takes the GCC/Clang branch (it accepts -m machine flags).
+      if (OJPH_COMPILER_MSVC_TRUE)
         set_source_files_properties(codestream/ojph_codestream_avx2.cpp PROPERTIES COMPILE_FLAGS "/arch:AVX2")
         set_source_files_properties(coding/ojph_block_decoder_avx2.cpp PROPERTIES COMPILE_FLAGS "/arch:AVX2")
         set_source_files_properties(coding/ojph_block_encoder_hwy.cpp PROPERTIES COMPILE_FLAGS "/arch:AVX2")
@@ -70,7 +71,7 @@ if(NOT EMSCRIPTEN)
       if (OJPH_ENABLE_HWY)
         # hwy's AVX2 baseline needs SSE4/AES/PCLMUL/BMI2/FMA/F16C as well;
         # every CPU that reports AVX2 also has these
-        if (MSVC)
+        if (OJPH_COMPILER_MSVC_TRUE)
           set_source_files_properties(codestream/ojph_codestream_hwy.cpp PROPERTIES COMPILE_FLAGS "/arch:AVX2")
         else()
           set_source_files_properties(codestream/ojph_codestream_hwy.cpp PROPERTIES COMPILE_FLAGS "-mavx2 -maes -mpclmul -mbmi -mbmi2 -mfma -mf16c")
@@ -99,17 +100,18 @@ if (OJPH_ENABLE_HWY AND (NOT OJPH_DISABLE_SIMD) AND (NOT EMSCRIPTEN)
   if (("${OJPH_TARGET_ARCH}" MATCHES "OJPH_ARCH_X86_64")
       OR ("${OJPH_TARGET_ARCH}" MATCHES "OJPH_ARCH_I386"))
     # the flags Highway needs for its AVX2 target
-    if (MSVC)
+    if (OJPH_COMPILER_MSVC_TRUE)
       set_source_files_properties(transform/ojph_transform_hwy.cpp
         transform/ojph_colour_hwy.cpp
         PROPERTIES COMPILE_FLAGS "/arch:AVX2")
     else()
-      # -ffp-contract=off keeps the float (irv/ICT) kernels from fusing
+      # OJPH_FFP_CONTRACT_OFF (-ffp-contract=off, spelled per driver in the
+      # top-level CMakeLists) keeps the float (irv/ICT) kernels from fusing
       # mul+add into fma, so their values match the generic implementation
       set_source_files_properties(transform/ojph_transform_hwy.cpp
         transform/ojph_colour_hwy.cpp
         PROPERTIES COMPILE_FLAGS
-        "-mavx2 -maes -mpclmul -mbmi -mbmi2 -mfma -mf16c -ffp-contract=off")
+        "-mavx2 -maes -mpclmul -mbmi -mbmi2 -mfma -mf16c ${OJPH_FFP_CONTRACT_OFF}")
     endif()
   endif()
 endif()

@@ -26,8 +26,8 @@ if (NOT OJPH_DISABLE_SIMD)
       list(APPEND SOURCES ${OJPH_IMG_IO_AVX2})
     endif()
 
-    # Set compilation flags
-    if (MSVC)
+    # Set compilation flags; clang-cl takes the GCC/Clang branch
+    if (OJPH_COMPILER_MSVC_TRUE)
       set_source_files_properties(../src/apps/others/ojph_img_io_avx2.cpp PROPERTIES COMPILE_FLAGS "/arch:AVX2")
     else()
       set_source_files_properties(../src/apps/others/ojph_img_io_sse41.cpp PROPERTIES COMPILE_FLAGS -msse4.1)

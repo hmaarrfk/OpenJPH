@@ -30,8 +30,8 @@ else()
       list(APPEND SOURCES ${OJPH_IMG_IO_AVX2})
       source_group("others" FILES ${OJPH_IMG_IO_AVX2})
 
-      # Set compilation flags
-      if (MSVC)
+      # Set compilation flags; clang-cl takes the GCC/Clang branch
+      if (OJPH_COMPILER_MSVC_TRUE)
         set_source_files_properties(${OJPH_IMG_IO_AVX2} PROPERTIES COMPILE_FLAGS "/arch:AVX2")
       else()
         set_source_files_properties(${OJPH_IMG_IO_SSE4} PROPERTIES COMPILE_FLAGS -msse4.1)
