@@ -452,6 +452,13 @@ namespace ojph {
     // encoder processes 2 * VL samples in each of 2 lines, i.e. VL quads.
     //////////////////////////////////////////////////////////////////////////
 
+    // Lanes are capped at 8 even on 512-bit targets: a 16-lane variant
+    // was measured slower on AVX3/AVX3_DL/AVX3_SPR (Xeon w5-2445) for
+    // everything except all-zero chunks (sparse/edge codeblocks were
+    // 28-35% slower per block), because the serial emission dominates
+    // and the wider cross-lane operations only add latency.  The AVX3
+    // targets still win over AVX2 with the same 8-lane code (6-14% per
+    // block) through the 256-bit EVEX encodings.
     using tag_u32 = hn::CappedTag<uint32_t, 8>;
     using tag_i32 = hn::RebindToSigned<tag_u32>;
     using vec_u32 = hn::Vec<tag_u32>;
