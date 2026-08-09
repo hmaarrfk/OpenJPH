@@ -55,19 +55,23 @@ if(NOT EMSCRIPTEN)
       if (OJPH_COMPILER_MSVC_TRUE)
         set_source_files_properties(codestream/ojph_codestream_avx2.cpp PROPERTIES COMPILE_FLAGS "/arch:AVX2")
         set_source_files_properties(coding/ojph_block_decoder_avx2.cpp PROPERTIES COMPILE_FLAGS "/arch:AVX2")
-        set_source_files_properties(coding/ojph_block_encoder_hwy.cpp PROPERTIES COMPILE_FLAGS "/arch:AVX2")
+        # the encoder keeps MSVC's pre-dispatch behavior: a single
+        # statically selected AVX2 target (no target attributes on MSVC)
+        set_source_files_properties(coding/ojph_block_encoder_hwy.cpp PROPERTIES
+          COMPILE_FLAGS "/arch:AVX2"
+          COMPILE_DEFINITIONS "HWY_COMPILE_ONLY_STATIC=1")
         set_source_files_properties(transform/ojph_transform_avx2.cpp PROPERTIES COMPILE_FLAGS "/arch:AVX2")
       else()
         set_source_files_properties(codestream/ojph_codestream_avx2.cpp PROPERTIES COMPILE_FLAGS -mavx2)
         set_source_files_properties(coding/ojph_block_decoder_avx2.cpp PROPERTIES COMPILE_FLAGS -mavx2)
         set_source_files_properties(transform/ojph_transform_avx2.cpp PROPERTIES COMPILE_FLAGS -mavx2)
-        # The HT block encoder is written against fixed 256-bit vectors,
-        # so it stays statically compiled for Highway's AVX2 target;
-        # run-time gated on X86_CPU_EXT_LEVEL_AVX2 in
-        # ojph_codeblock_fun.cpp.  Highway's static AVX2 target
-        # additionally needs BMI2/FMA/F16C/AES/PCLMUL (present on every
-        # AVX2-capable CPU).
-        set_source_files_properties(coding/ojph_block_encoder_hwy.cpp PROPERTIES COMPILE_FLAGS "-mavx2 -mbmi -mbmi2 -mfma -mf16c -maes -mpclmul")
+        # dynamic dispatch: hwy's foreach_target compiles the encoder once
+        # per x86 target (SSE4 through the AVX3 variants) with per-function
+        # target attributes, so the TU needs no -m flags and stays runnable
+        # on any x86-64.  SSE2 and SSSE3 are dropped; the run-time gate in
+        # ojph_codeblock_fun.cpp requires SSE4.1.
+        set_source_files_properties(coding/ojph_block_encoder_hwy.cpp PROPERTIES
+          COMPILE_DEFINITIONS "HWY_DISABLED_TARGETS=(HWY_SSE2|HWY_SSSE3)")
       endif()
       if (OJPH_ENABLE_HWY)
         # The width-portable data-movement kernels use foreach_target.h
@@ -147,6 +151,7 @@ if (OJPH_USE_HWY)
   target_include_directories(ojph PRIVATE ${OJPH_HWY_INCLUDE_DIR})
   # foreach_target.h re-includes the hwy translation units by the path
   # set in HWY_TARGET_INCLUDE, which is relative to this directory
+  # (the transform/colour/codestream TUs and the coding/... encoder TU)
   target_include_directories(ojph PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   # run-time dispatch (hwy::SupportedTargets and the chosen-target
   # bookkeeping) lives in the hwy library; the top-level CMakeLists
