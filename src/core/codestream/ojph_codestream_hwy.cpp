@@ -166,6 +166,18 @@ namespace ojph {
       const si32 *p = (const si32*)sp;
 
       ui32 i = 0;
+      for ( ; i + 2 * N <= count; i += 2 * (ui32)N)
+      { // unrolled twice; large codeblock widths benefit measurably
+        auto v0 = hn::LoadU(d, p + i);
+        auto v1 = hn::LoadU(d, p + i + N);
+        auto sign0 = hn::And(v0, sign_mask);
+        auto sign1 = hn::And(v1, sign_mask);
+        auto val0 = hn::ShiftLeftSame(hn::Abs(v0), shift);
+        auto val1 = hn::ShiftLeftSame(hn::Abs(v1), shift);
+        tmax = hn::Or(tmax, hn::Or(val0, val1));
+        hn::StoreU(hn::Or(val0, sign0), d, (si32*)dp + i);
+        hn::StoreU(hn::Or(val1, sign1), d, (si32*)dp + i + N);
+      }
       for ( ; i + N <= count; i += (ui32)N)
       {
         auto v = hn::LoadU(d, p + i);
