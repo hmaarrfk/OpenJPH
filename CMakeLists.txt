@@ -64,7 +64,37 @@ if (OJPH_ENABLE_HWY)
   find_path(OJPH_HWY_INCLUDE_DIR NAMES hwy/highway.h
             HINTS $ENV{CONDA_PREFIX}/include)
   if (OJPH_HWY_INCLUDE_DIR)
-    message(STATUS "Google Highway headers found: ${OJPH_HWY_INCLUDE_DIR}")
+    # The kernels use APIs newer than some distribution packages (e.g.
+    # NearestIntInRange, absent from Ubuntu's libhwy 1.0.x), so probe the
+    # found headers for what is actually needed instead of trusting a
+    # version number.
+    include(CheckCXXSourceCompiles)
+    set(CMAKE_REQUIRED_INCLUDES "${OJPH_HWY_INCLUDE_DIR}")
+    check_cxx_source_compiles("
+      #include <hwy/highway.h>
+      namespace hn = hwy::HWY_NAMESPACE;
+      int main() {
+        const hn::ScalableTag<int> di;
+        const hn::ScalableTag<float> df;
+        return (int)hn::GetLane(hn::NearestIntInRange(di, hn::Zero(df)));
+      }" OJPH_HWY_IS_USABLE)
+    unset(CMAKE_REQUIRED_INCLUDES)
+    if (NOT OJPH_HWY_IS_USABLE)
+      if (OJPH_REQUIRE_HWY)
+        message(FATAL_ERROR "Google Highway headers at "
+                            "${OJPH_HWY_INCLUDE_DIR} are too old for the "
+                            "hwy kernels and OJPH_REQUIRE_HWY is ON; "
+                            "install a recent libhwy (>= 1.2) or point "
+                            "OJPH_HWY_INCLUDE_DIR at one")
+      endif()
+      message(STATUS "Google Highway headers at ${OJPH_HWY_INCLUDE_DIR} "
+                     "are too old for the hwy kernels; disabling "
+                     "OJPH_ENABLE_HWY")
+      set(OJPH_ENABLE_HWY OFF)
+      set(OJPH_HWY_INCLUDE_DIR "" CACHE PATH "" FORCE)
+    else()
+      message(STATUS "Google Highway headers found: ${OJPH_HWY_INCLUDE_DIR}")
+    endif()
   else()
     if (OJPH_REQUIRE_HWY)
       message(FATAL_ERROR "Google Highway headers not found and "
