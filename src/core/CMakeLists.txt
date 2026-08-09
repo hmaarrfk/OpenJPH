@@ -185,11 +185,13 @@ if (OJPH_ENABLE_HWY AND (NOT OJPH_DISABLE_SIMD) AND (NOT EMSCRIPTEN)
     # the flags Highway needs for its AVX2 target
     if (MSVC)
       set_source_files_properties(transform/ojph_transform_hwy.cpp
+        transform/ojph_colour_hwy.cpp
         PROPERTIES COMPILE_FLAGS "/arch:AVX2")
     else()
-      # -ffp-contract=off keeps the float (irv) kernels from fusing
+      # -ffp-contract=off keeps the float (irv/ICT) kernels from fusing
       # mul+add into fma, so their values match the generic implementation
       set_source_files_properties(transform/ojph_transform_hwy.cpp
+        transform/ojph_colour_hwy.cpp
         PROPERTIES COMPILE_FLAGS
         "-mavx2 -maes -mpclmul -mbmi -mbmi2 -mfma -mf16c -ffp-contract=off")
     endif()

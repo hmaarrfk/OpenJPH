@@ -198,6 +198,13 @@ namespace ojph {
 
     #endif // !(defined(OJPH_ARCH_X86_64) || defined(OJPH_ARCH_I386))
 
+    #ifdef OJPH_ENABLE_HWY
+        // Google Highway implementations; these replace the RCT/ICT
+        // functions selected above when the CPU supports the target
+        // Highway was compiled for.
+        hwy_install_colour_transforms();
+    #endif
+
   #endif // !OJPH_DISABLE_SIMD
 
 #else // OJPH_ENABLE_WASM_SIMD

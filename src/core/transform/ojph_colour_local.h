@@ -114,6 +114,22 @@ namespace ojph {
     void gen_ict_backward(const float *y, const float *cb, const float *cr,
                           float *r, float *g, float *b, ui32 repeat);
 
+#ifdef OJPH_ENABLE_HWY
+    //////////////////////////////////////////////////////////////////////////
+    //
+    //
+    //                      Google Highway Functions
+    //
+    //
+    //////////////////////////////////////////////////////////////////////////
+
+    //////////////////////////////////////////////////////////////////////////
+    // Replaces the colour transform function pointers (RCT and ICT) with
+    // Highway implementations, when the CPU supports the target Highway
+    // was compiled for.
+    void hwy_install_colour_transforms();
+#endif // OJPH_ENABLE_HWY
+
     //////////////////////////////////////////////////////////////////////////
     //
     //
