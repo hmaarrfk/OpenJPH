@@ -69,9 +69,12 @@ if(NOT EMSCRIPTEN)
         # per x86 target (SSE4 through the AVX3 variants) with per-function
         # target attributes, so the TU needs no -m flags and stays runnable
         # on any x86-64.  SSE2 and SSSE3 are dropped; the run-time gate in
-        # ojph_codeblock_fun.cpp requires SSE4.1.
+        # ojph_codeblock_fun.cpp requires SSE4.1.  AVX3_ZEN4 is dropped
+        # too: no Zen 4 hardware was measured, so ship only the measured
+        # targets (Zen 4 CPUs dispatch to the AVX3_DL code instead).
         set_source_files_properties(coding/ojph_block_encoder_hwy.cpp PROPERTIES
-          COMPILE_DEFINITIONS "HWY_DISABLED_TARGETS=(HWY_SSE2|HWY_SSSE3)")
+          COMPILE_DEFINITIONS
+          "HWY_DISABLED_TARGETS=(HWY_SSE2|HWY_SSSE3|HWY_AVX3_ZEN4)")
       endif()
       if (OJPH_ENABLE_HWY)
         # The width-portable data-movement kernels use foreach_target.h
@@ -83,7 +86,7 @@ if(NOT EMSCRIPTEN)
           set_source_files_properties(codestream/ojph_codestream_hwy.cpp
             PROPERTIES COMPILE_FLAGS "${OJPH_FFP_CONTRACT_OFF}"
             COMPILE_DEFINITIONS
-            "HWY_DISABLED_TARGETS=(HWY_SSE2|HWY_SSSE3);HWY_BROKEN_EMU128=0")
+            "HWY_DISABLED_TARGETS=(HWY_SSE2|HWY_SSSE3|HWY_AVX3_ZEN4);HWY_BROKEN_EMU128=0")
         endif()
       endif()
     endif()
@@ -116,7 +119,8 @@ if (OJPH_COMPILER_MSVC_TRUE)
 # no target flags: foreach_target.h needs the baseline left low
       # (per-target code is built with function target attributes), so
       # the compiled targets span SSE4 through AVX3_SPR; SSE2/SSSE3 are
-      # disabled to bound the target count.  With them disabled, the
+      # disabled to bound the target count, and AVX3_ZEN4 because no
+      # Zen 4 hardware was measured (Zen 4 dispatches to AVX3_DL).  With them disabled, the
       # baseline is hwy's portable fallback; keep that at EMU128 (GCC
       # older than 16 would otherwise pick HWY_SCALAR, which lacks some
       # of the ops used here) -- the fallback only has to compile, since
@@ -128,7 +132,7 @@ if (OJPH_COMPILER_MSVC_TRUE)
         transform/ojph_colour_hwy.cpp
         PROPERTIES COMPILE_FLAGS "${OJPH_FFP_CONTRACT_OFF}"
         COMPILE_DEFINITIONS
-        "HWY_DISABLED_TARGETS=(HWY_SSE2|HWY_SSSE3);HWY_BROKEN_EMU128=0")
+        "HWY_DISABLED_TARGETS=(HWY_SSE2|HWY_SSSE3|HWY_AVX3_ZEN4);HWY_BROKEN_EMU128=0")
     endif()
   endif()
 endif()
