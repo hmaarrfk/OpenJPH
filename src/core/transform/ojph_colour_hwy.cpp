@@ -34,7 +34,8 @@
 //***************************************************************************/
 
 // Google Highway implementations of the colour transforms (RCT and
-// ICT).  Like ojph_transform_hwy.cpp, this translation unit is compiled
+// ICT) and the rev_convert line conversion.  Like
+// ojph_transform_hwy.cpp, this translation unit is compiled
 // for a single (static) Highway target and installed only when the CPU
 // supports it; it is compiled with -ffp-contract=off, so the float
 // (ICT) results are identical to the generic implementation.
@@ -58,6 +59,65 @@ namespace hn = hwy::HWY_NAMESPACE;
 
 namespace ojph {
   namespace local {
+
+    //////////////////////////////////////////////////////////////////////////
+    // add a shift while copying a line, converting between 32- and
+    // 64-bit integers as needed; values identical to gen_rev_convert.
+    // This is the hot per-line output conversion of tile::pull for
+    // components with 32-bit lines.
+    static
+    void simd_rev_convert(
+      const line_buf *src_line, const ui32 src_line_offset,
+      line_buf *dst_line, const ui32 dst_line_offset,
+      si64 shift, ui32 width)
+    {
+      if (src_line->flags & line_buf::LFT_32BIT)
+      {
+        if (dst_line->flags & line_buf::LFT_32BIT)
+        {
+          const si32 *sp = src_line->i32 + src_line_offset;
+          si32 *dp = dst_line->i32 + dst_line_offset;
+          const hn::ScalableTag<si32> d;
+          const ui32 L = (ui32)hn::Lanes(d);
+          const auto vs = hn::Set(d, (si32)shift);
+          for (ui32 i = 0; i < width; i += L)
+            hn::StoreU(hn::Add(hn::LoadU(d, sp + i), vs), d, dp + i);
+        }
+        else
+        {
+          const si32 *sp = src_line->i32 + src_line_offset;
+          si64 *dp = dst_line->i64 + dst_line_offset;
+          const hn::ScalableTag<si64> d64;
+          const hn::Rebind<si32, decltype(d64)> d32h; // half-width
+          const ui32 L = (ui32)hn::Lanes(d64);
+          const auto vs = hn::Set(d64, shift);
+          for (ui32 i = 0; i < width; i += L)
+          {
+            auto v = hn::PromoteTo(d64, hn::LoadU(d32h, sp + i));
+            hn::StoreU(hn::Add(v, vs), d64, dp + i);
+          }
+        }
+      }
+      else
+      {
+        assert(src_line->flags & line_buf::LFT_64BIT);
+        assert(dst_line->flags & line_buf::LFT_32BIT);
+        const si64 *sp = src_line->i64 + src_line_offset;
+        si32 *dp = dst_line->i32 + dst_line_offset;
+        const hn::ScalableTag<si64> d64;
+        const hn::Rebind<ui32, decltype(d64)> du32h; // half-width
+        const hn::RebindToUnsigned<decltype(d64)> du64;
+        const ui32 L = (ui32)hn::Lanes(d64);
+        const auto vs = hn::Set(d64, shift);
+        for (ui32 i = 0; i < width; i += L)
+        {
+          auto v = hn::Add(hn::LoadU(d64, sp + i), vs);
+          // truncate si64 to si32, as the generic implementation does
+          hn::StoreU(hn::TruncateTo(du32h, hn::BitCast(du64, v)),
+                     du32h, (ui32*)dp + i);
+        }
+      }
+    }
 
     //////////////////////////////////////////////////////////////////////////
     // Forward RCT; values identical to gen_rct_forward.  Like all the
@@ -279,6 +339,7 @@ namespace ojph {
         return;
   #endif
 #endif
+      rev_convert  = simd_rev_convert;
       rct_forward  = simd_rct_forward;
       rct_backward = simd_rct_backward;
       ict_forward  = simd_ict_forward;
