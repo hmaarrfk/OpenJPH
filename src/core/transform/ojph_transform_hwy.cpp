@@ -801,12 +801,19 @@ namespace ojph {
 
     //////////////////////////////////////////////////////////////////////////
     // Synthesis; values identical to gen_rev_horz_syn_prev_T.
+    // The vector width is capped at 256 bits: on the 512-bit targets
+    // this loop's StoreInterleaved2 measured slower than the 256-bit
+    // shape (Xeon w5-2445, 4096-sample lines: si32 192 vs 167 ns/line,
+    // si16 96 vs 86 ns/line at AVX3/AVX3_DL vs AVX2), so AVX3+ tiers
+    // execute the 256-bit shape instead -- the same trade the HT block
+    // encoder makes with its lane cap.  The analysis kernels above stay
+    // width-uncapped; they win at 512 bits.
     template <typename T>
     static
     void rev_horz_syn_prev_T(T* dp, const T* lp, const T* hp,
                                  ui32 width, bool even)
     {
-      const hn::ScalableTag<T> d;
+      const hn::CappedTag<T, 32 / sizeof(T)> d;
       const ui32 L = (ui32)hn::Lanes(d);
 
       if (even)
