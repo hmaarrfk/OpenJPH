@@ -410,7 +410,8 @@ namespace ojph {
       // SupportedTargets() re-initializes hwy's chosen dispatch target
       // with the full detected set, counting on its caller to narrow it
       // to the returned (possibly DisableTargets-masked) set; do so, or
-      // a preceding hwy::DisableTargets() would be ignored
+      // a preceding hwy::DisableTargets() would be ignored (see
+      // ojph_transform_hwy.cpp)
       hwy::GetChosenTarget().Update(sup);
       if ((sup & HWY_TARGETS & ~(HWY_EMU128 | HWY_SCALAR)) == 0)
         return;

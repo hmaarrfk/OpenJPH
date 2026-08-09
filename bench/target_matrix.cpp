@@ -314,12 +314,15 @@ int main(int argc, char** argv)
   printf("codeblock tx, 1024 samples\n");
   {
     const ui32 n = 1024, K = 8;
-    std::vector<ui32> cb(n + 64);
+    // 64-byte aligned: the avx2 survivor kernels round the count up to
+    // whole vectors and use aligned accesses
+    ui32* cb = (ui32*)aligned_alloc(64, (n + 64) * sizeof(ui32));
+    si32* l32 = (si32*)aligned_alloc(64, (n + 64) * sizeof(si32));
+    si16* l16 = (si16*)aligned_alloc(64, (n + 64) * sizeof(si16));
+    float* lf = (float*)aligned_alloc(64, (n + 64) * sizeof(float));
     for (ui32 i = 0; i < n + 64; ++i)
       cb[i] = (i * 2654435761u) & 0x807FFFFFu; // sign + 23 mag bits
-    std::vector<si32> l32(n + 64);
-    std::vector<si16> l16(n + 64);
-    std::vector<float> lf(n + 64);
+    memset(l16, 0, (n + 64) * sizeof(si16));
     for (ui32 i = 0; i < n + 64; ++i) {
       l32[i] = (si32)(i * 2654435761u) >> 12;
       lf[i] = (float)l32[i];
@@ -327,25 +330,26 @@ int main(int argc, char** argv)
     ui32 max_val[8];
     report_n("tx_to_cb32 rev (hwy)", best_of([&]{
       memset(max_val, 0, sizeof(max_val));
-      rev_tx_to_cb32(l32.data(), cb.data(), K, 0.f, n, max_val); }), n);
+      rev_tx_to_cb32(l32, cb, K, 0.f, n, max_val); }), n);
     report_n("tx_to_cb32 irv (hwy)", best_of([&]{
       memset(max_val, 0, sizeof(max_val));
-      irv_tx_to_cb32(lf.data(), cb.data(), K, 0.5f, n, max_val); }), n);
+      irv_tx_to_cb32(lf, cb, K, 0.5f, n, max_val); }), n);
     report_n("tx_from_cb32 rev (hwy)", best_of([&]{
-      rev_tx_from_cb32(cb.data(), l32.data(), K, 0.f, n); }), n);
+      rev_tx_from_cb32(cb, l32, K, 0.f, n); }), n);
 #if defined(OJPH_ARCH_X86_64) || defined(OJPH_ARCH_I386)
     if (get_cpu_ext_level() >= X86_CPU_EXT_LEVEL_AVX2)
       report_n("tx_from_cb32 rev (avx2 surv)", best_of([&]{
-        avx2_rev_tx_from_cb32(cb.data(), l32.data(), K, 0.f, n); }), n);
+        avx2_rev_tx_from_cb32(cb, l32, K, 0.f, n); }), n);
 #endif
     report_n("tx_from_cb32 irv (hwy)", best_of([&]{
-      irv_tx_from_cb32(cb.data(), lf.data(), K, 0.5f, n); }), n);
+      irv_tx_from_cb32(cb, lf, K, 0.5f, n); }), n);
     report_n("tx_from_cb16 (hwy)", best_of([&]{
-      rev_tx_from_cb16(cb.data(), l16.data(), K, n); }), n);
+      rev_tx_from_cb16(cb, l16, K, n); }), n);
     report_n("rev_convert16", best_of([&]{
-      rev_convert16(l16.data(), l32.data(), 128, n); }), n);
+      rev_convert16(l16, l32, 128, n); }), n);
     double t = best_of([&]{ find_max_val32(max_val); });
     printf("  %-36s %8.2f ns/call\n", "find_max_val32", t * 1e9);
+    free(cb); free(l32); free(l16); free(lf);
   }
 
   printf("end-to-end, 4096x4096 u8 mask, best of 5\n");

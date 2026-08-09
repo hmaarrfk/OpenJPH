@@ -340,6 +340,22 @@ namespace ojph {
     }
 
     //////////////////////////////////////////////////////////////////////////
+    // True when dispatch will resolve to an AVX-512 class target (the
+    // target bits are ordered so that smaller values are newer); used to
+    // prefer the hwy kernels over the hand-written AVX2 survivors where
+    // the 512-bit versions measured faster
+    bool hwy_tx_kernels_use_avx3()
+    {
+      if (!hwy_tx_kernels_available())
+        return false;
+      const int64_t sup = hwy::SupportedTargets();
+      hwy::GetChosenTarget().Update(sup); // see above
+      const int64_t simd = sup & HWY_TARGETS & ~(HWY_EMU128 | HWY_SCALAR);
+      const int64_t best = simd & (-simd);
+      return best != 0 && best <= HWY_AVX3;
+    }
+
+    //////////////////////////////////////////////////////////////////////////
     // or-reduce the 8-entry max_val accumulator kept by the tx_to_cb32
     // kernels above (the generic kernels use entry 0 only, so this works
     // for them too); called once per codeblock
