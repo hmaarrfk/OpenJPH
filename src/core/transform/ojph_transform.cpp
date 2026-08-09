@@ -115,7 +115,6 @@ namespace ojph {
     {
       static std::once_flag wavelet_transform_functions_init_flag;
       std::call_once(wavelet_transform_functions_init_flag, [](){
-#if !defined(OJPH_ENABLE_WASM_SIMD) || !defined(OJPH_EMSCRIPTEN)
 
         rev_vert_step             = gen_rev_vert_step;
         rev_horz_ana              = gen_rev_horz_ana;
@@ -133,77 +132,12 @@ namespace ojph {
   #ifndef OJPH_DISABLE_SIMD
 
     #if (defined(OJPH_ARCH_X86_64) || defined(OJPH_ARCH_I386))
-
-      #ifndef OJPH_DISABLE_SSE
-        if (get_cpu_ext_level() >= X86_CPU_EXT_LEVEL_SSE)
-        {
-          irv_vert_step             = sse_irv_vert_step;
-          irv_vert_times_K          = sse_irv_vert_times_K;
-          irv_horz_ana              = sse_irv_horz_ana;
-          irv_horz_syn              = sse_irv_horz_syn;
-        }
-      #endif // !OJPH_DISABLE_SSE
-
-      #ifndef OJPH_DISABLE_SSE2
-        if (get_cpu_ext_level() >= X86_CPU_EXT_LEVEL_SSE2)
-        {
-          rev_vert_step             = sse2_rev_vert_step;
-          rev_horz_ana              = sse2_rev_horz_ana;
-          rev_horz_syn              = sse2_rev_horz_syn;
-        }
-      #endif // !OJPH_DISABLE_SSE2
-
-      #ifndef OJPH_DISABLE_AVX
-        if (get_cpu_ext_level() >= X86_CPU_EXT_LEVEL_AVX)
-        {
-          irv_vert_step             = avx_irv_vert_step;
-          irv_vert_times_K          = avx_irv_vert_times_K;
-          irv_horz_ana              = avx_irv_horz_ana;      
-          irv_horz_syn              = avx_irv_horz_syn;
-        }
-      #endif // !OJPH_DISABLE_AVX
-
-      #ifndef OJPH_DISABLE_AVX2
+        // the hand-written AVX2 vertical step measured faster than its
+        // Highway equivalent, so it is kept; the Highway installation
+        // below leaves it in place (as the fallback it forwards to)
         if (get_cpu_ext_level() >= X86_CPU_EXT_LEVEL_AVX2)
-        {
           rev_vert_step             = avx2_rev_vert_step;
-          rev_horz_ana              = avx2_rev_horz_ana;
-          rev_horz_syn              = avx2_rev_horz_syn;
-        }
-      #endif // !OJPH_DISABLE_AVX2
-
-      #if (defined(OJPH_ARCH_X86_64) && !defined(OJPH_DISABLE_AVX512))
-        if (get_cpu_ext_level() >= X86_CPU_EXT_LEVEL_AVX512)
-        {
-          // rev_vert_step             = avx512_rev_vert_step;
-          // rev_horz_ana              = avx512_rev_horz_ana;
-          // rev_horz_syn              = avx512_rev_horz_syn;
-
-          irv_vert_step             = avx512_irv_vert_step;
-          irv_vert_times_K          = avx512_irv_vert_times_K;
-          irv_horz_ana              = avx512_irv_horz_ana;
-          irv_horz_syn              = avx512_irv_horz_syn;
-        }
-      #endif // !OJPH_DISABLE_AVX512
-    
-    #elif defined(OJPH_ARCH_ARM)
-
-    #elif defined(OJPH_ARCH_PPC64LE)
-
-        if (get_cpu_ext_level() >= PPC_CPU_EXT_LEVEL_ARCH_3_00)
-        {
-          // 128-bit VSX kernels; see ojph_simd_vsx.h
-          rev_vert_step             = vsx_rev_vert_step;
-          rev_horz_ana              = vsx_rev_horz_ana;
-          rev_horz_syn              = vsx_rev_horz_syn;
-
-          irv_vert_step             = vsx_irv_vert_step;
-          irv_vert_times_K          = vsx_irv_vert_times_K;
-          irv_horz_ana              = vsx_irv_horz_ana;
-          irv_horz_syn              = vsx_irv_horz_syn;
-        }
-
-    #endif // !(defined(OJPH_ARCH_X86_64) || defined(OJPH_ARCH_I386))
+    #endif
 
     #ifdef OJPH_ENABLE_HWY
         // Google Highway implementations; this replaces some of the
@@ -215,23 +149,10 @@ namespace ojph {
     #endif
 
   #endif // !OJPH_DISABLE_SIMD
-
-#else // OJPH_ENABLE_WASM_SIMD
-        rev_vert_step             = wasm_rev_vert_step;
-        rev_horz_ana              = wasm_rev_horz_ana;
-        rev_horz_syn              = wasm_rev_horz_syn;
-        
-        irv_vert_step             = wasm_irv_vert_step;
-        irv_vert_times_K          = wasm_irv_vert_times_K;
-        irv_horz_ana              = wasm_irv_horz_ana;
-        irv_horz_syn              = wasm_irv_horz_syn;
-#endif // !OJPH_ENABLE_WASM_SIMD
       });
     }
-    
-    //////////////////////////////////////////////////////////////////////////
 
-#if !defined(OJPH_ENABLE_WASM_SIMD) || !defined(OJPH_EMSCRIPTEN)
+    //////////////////////////////////////////////////////////////////////////
 
     /////////////////////////////////////////////////////////////////////////
     static
@@ -1285,8 +1206,6 @@ namespace ojph {
           dst->f32[0] = hsrc->f32[0] * 0.5f;
       }
     }
-
-#endif // !OJPH_ENABLE_WASM_SIMD
 
   }
 }
