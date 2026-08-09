@@ -38,6 +38,12 @@
 #ifndef OJPH_THREADS_H
 #define OJPH_THREADS_H
 
+// ojph_defs.h carries the fork's token-level namespace rename (ojph ->
+// ojphf); without it this header's declarations would stay in the ojph
+// namespace whenever it is included ahead of any core header, splitting
+// thds:: across two namespaces within one program.
+#include "ojph_defs.h"
+
 #include <atomic>
 #include <vector>
 #include <thread>
