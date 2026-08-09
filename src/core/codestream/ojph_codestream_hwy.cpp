@@ -117,6 +117,140 @@ namespace ojph {
     }
 
     //////////////////////////////////////////////////////////////////////////
+    // fold a vector or-accumulator into the caller's max_val array; the
+    // array holds 8 ui32 (see codeblock::max_val32), which matches the
+    // AVX2 vector width this file is compiled for; other widths fold to
+    // a scalar in element 0, which every find_max_val32 handles too
+    static inline
+    void hwy_fold_max_val(hn::Vec<hn::ScalableTag<si32> > tmax,
+                          ui32 *max_val)
+    {
+      const hn::ScalableTag<si32> d;
+      const size_t N = hn::Lanes(d);
+      if (N == 8)
+      {
+        auto m = hn::LoadU(d, (si32*)max_val);
+        hn::StoreU(hn::Or(m, tmax), d, (si32*)max_val);
+      }
+      else
+      {
+        HWY_ALIGN si32 tmp[HWY_MAX_LANES_D(hn::ScalableTag<si32>)];
+        hn::Store(tmax, d, tmp);
+        ui32 t = 0;
+        for (size_t i = 0; i < N; ++i)
+          t |= (ui32)tmp[i];
+        max_val[0] |= t;
+      }
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    // 32-bit line samples to sign-magnitude ui32 codeblock samples,
+    // or-accumulating the magnitudes into max_val; the hwy equivalent of
+    // gen_rev_tx_to_cb32.  Like the AVX2 implementation, the last
+    // iteration loads and stores a whole vector (the buffers are padded)
+    // and masks the extra lanes out of the accumulator only.
+    void hwy_rev_tx_to_cb32(const void *sp, ui32 *dp, ui32 K_max,
+                            float delta_inv, ui32 count, ui32* max_val)
+    {
+      ojph_unused(delta_inv);
+      const int shift = (int)(31 - K_max);
+      const hn::ScalableTag<si32> d;
+      const size_t N = hn::Lanes(d);
+      const auto sign_mask = hn::Set(d, (si32)0x80000000);
+      auto tmax = hn::Zero(d);
+      const si32 *p = (const si32*)sp;
+
+      ui32 i = 0;
+      for ( ; i + N <= count; i += (ui32)N)
+      {
+        auto v = hn::LoadU(d, p + i);
+        auto sign = hn::And(v, sign_mask);
+        auto val = hn::ShiftLeftSame(hn::Abs(v), shift);
+        tmax = hn::Or(tmax, val);
+        hn::StoreU(hn::Or(val, sign), d, (si32*)dp + i);
+      }
+      if (i < count)
+      {
+        auto v = hn::LoadU(d, p + i);
+        auto sign = hn::And(v, sign_mask);
+        auto val = hn::ShiftLeftSame(hn::Abs(v), shift);
+        tmax = hn::Or(tmax,
+          hn::IfThenElseZero(hn::FirstN(d, count - i), val));
+        hn::StoreU(hn::Or(val, sign), d, (si32*)dp + i);
+      }
+      hwy_fold_max_val(tmax, max_val);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    // quantize float line samples to sign-magnitude ui32 codeblock
+    // samples, or-accumulating the magnitudes into max_val; the hwy
+    // equivalent of avx2_irv_tx_to_cb32 (round to nearest, like the
+    // SSE2/AVX2 implementations; the generic implementation truncates).
+    // NearestIntInRange is a bare cvt (values are in range by design,
+    // as the other implementations also assume)
+    void hwy_irv_tx_to_cb32(const void *sp, ui32 *dp, ui32 K_max,
+                            float delta_inv, ui32 count, ui32* max_val)
+    {
+      ojph_unused(K_max);
+      const hn::ScalableTag<si32> d;
+      const hn::RebindToFloat<decltype(d)> df;
+      const size_t N = hn::Lanes(d);
+      const auto sign_mask = hn::Set(d, (si32)0x80000000);
+      const auto vdelta_inv = hn::Set(df, delta_inv);
+      auto tmax = hn::Zero(d);
+      const float *p = (const float*)sp;
+
+      ui32 i = 0;
+      for ( ; i + N <= count; i += (ui32)N)
+      {
+        auto vf = hn::Mul(hn::LoadU(df, p + i), vdelta_inv);
+        auto t = hn::NearestIntInRange(d, vf);
+        auto sign = hn::And(t, sign_mask);
+        auto val = hn::Abs(t);
+        tmax = hn::Or(tmax, val);
+        hn::StoreU(hn::Or(val, sign), d, (si32*)dp + i);
+      }
+      if (i < count)
+      {
+        auto vf = hn::Mul(hn::LoadU(df, p + i), vdelta_inv);
+        auto t = hn::NearestIntInRange(d, vf);
+        auto sign = hn::And(t, sign_mask);
+        auto val = hn::Abs(t);
+        tmax = hn::Or(tmax,
+          hn::IfThenElseZero(hn::FirstN(d, count - i), val));
+        hn::StoreU(hn::Or(val, sign), d, (si32*)dp + i);
+      }
+      hwy_fold_max_val(tmax, max_val);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    // sign-magnitude ui32 codeblock samples to a dequantized float line;
+    // the hwy equivalent of gen_irv_tx_from_cb32
+    void hwy_irv_tx_from_cb32(const ui32 *sp, void *dp, ui32 K_max,
+                              float delta, ui32 count)
+    {
+      ojph_unused(K_max);
+      const hn::ScalableTag<si32> d;
+      const hn::RebindToFloat<decltype(d)> df;
+      const size_t N = hn::Lanes(d);
+      const auto mag_mask = hn::Set(d, 0x7FFFFFFF);
+      const auto vdelta = hn::Set(df, delta);
+      float *p = (float*)dp;
+
+      // the loop overruns count to whole vectors, as the AVX2
+      // implementation does; the buffers are padded
+      for (ui32 i = 0; i < count; i += (ui32)N)
+      {
+        auto v = hn::LoadU(d, (const si32*)sp + i);
+        auto mag = hn::And(v, mag_mask);
+        auto valf = hn::Mul(hn::ConvertTo(df, mag), vdelta);
+        auto sign = hn::AndNot(mag_mask, v);
+        valf = hn::Or(valf, hn::BitCast(df, sign));
+        hn::StoreU(valf, df, p + i);
+      }
+    }
+
+    //////////////////////////////////////////////////////////////////////////
     // widen a 16-bit component line to 32 bits, undoing the level shift;
     // the hwy equivalent of the scalar loop in tile::pull
     void hwy_rev_convert16(const si16 *sp, si32 *dp, si32 shift, ui32 count)

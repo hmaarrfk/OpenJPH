@@ -117,6 +117,12 @@ namespace ojph {
                                ui32 count);
     void  hwy_rev_tx_from_cb32(const ui32 *sp, void *dp, ui32 K_max,
                                float delta, ui32 count);
+    void  hwy_rev_tx_to_cb32(const void *sp, ui32 *dp, ui32 K_max,
+                             float delta_inv, ui32 count, ui32* max_val);
+    void  hwy_irv_tx_to_cb32(const void *sp, ui32 *dp, ui32 K_max,
+                             float delta_inv, ui32 count, ui32* max_val);
+    void  hwy_irv_tx_from_cb32(const ui32 *sp, void *dp, ui32 K_max,
+                               float delta, ui32 count);
 #endif
 
     //////////////////////////////////////////////////////////////////////////
@@ -271,13 +277,21 @@ namespace ojph {
           bool result = initialize_block_encoder_tables_hwy();
           assert(result); ojph_unused(result);
         }
-        // Google Highway decode-side kernels; the hwy translation unit is
-        // compiled for a statically selected AVX2 target, so gate on AVX2.
-        // Only tx_from_cb16 is dispatched: hwy_rev_tx_from_cb32 measured
-        // slightly slower than the hand-written avx2_rev_tx_from_cb32
-        // (which skips tail handling by rounding up to whole vectors)
-        if (get_cpu_ext_level() >= X86_CPU_EXT_LEVEL_AVX2)
+        // Google Highway data-movement kernels; the hwy translation unit
+        // is compiled for a statically selected AVX2 target, so gate on
+        // AVX2.  rev tx_from_cb32 is NOT dispatched: hwy_rev_tx_from_cb32
+        // measured slightly slower than the hand-written
+        // avx2_rev_tx_from_cb32 (which skips tail handling by rounding up
+        // to whole vectors)
+        if (get_cpu_ext_level() >= X86_CPU_EXT_LEVEL_AVX2) {
           tx_from_cb16 = hwy_rev_tx_from_cb16;
+          if (reversible)
+            tx_to_cb32 = hwy_rev_tx_to_cb32;
+          else {
+            tx_to_cb32 = hwy_irv_tx_to_cb32;
+            tx_from_cb32 = hwy_irv_tx_from_cb32;
+          }
+        }
       #endif // OJPH_ENABLE_HWY
 
       #if (defined(OJPH_ARCH_X86_64) && !defined(OJPH_DISABLE_AVX512))
