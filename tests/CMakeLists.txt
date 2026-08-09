@@ -82,7 +82,10 @@ gtest_add_tests(TARGET test_mixed_coc)
 gtest_add_tests(TARGET test_rev13)
 gtest_add_tests(TARGET test_rev12)
 
-if (MSVC)
+# The "\$(Configuration)" paths below are Visual Studio generator syntax;
+# an MSVC-family compiler driven by a single-config generator (cl or
+# clang-cl with Ninja) takes the else branch instead.
+if (MSVC AND CMAKE_GENERATOR MATCHES "Visual Studio")
   add_custom_command(TARGET test_executables POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy "../bin/\$(Configuration)/gtest.dll" "./"
     COMMAND ${CMAKE_COMMAND} -E copy "../bin/\$(Configuration)/gtest_main.dll" "./"
@@ -119,5 +122,13 @@ else()
       COMMAND ${CMAKE_COMMAND} -E copy "../bin/${CMAKE_SHARED_LIBRARY_PREFIX}gtest_main.dll" "./"
       COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:ojph>" "./"
     )
+  elseif(WIN32 AND BUILD_SHARED_LIBS)
+    # cl or clang-cl with a single-config generator (e.g. Ninja): the
+    # DLLs sit next to their targets, with no per-configuration directory
+    add_custom_command(TARGET test_executables POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:gtest>" "./"
+      COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:gtest_main>" "./"
+      COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:ojph>" "./"
+    )
   endif()
-endif(MSVC)
+endif()
