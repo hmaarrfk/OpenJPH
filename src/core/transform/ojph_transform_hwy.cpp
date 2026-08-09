@@ -1194,11 +1194,6 @@ namespace ojph {
     }
 
     //////////////////////////////////////////////////////////////////////////
-    // True when the hwy vertical step should be preferred over the
-    // fallback; set at install time (see install_rev_transforms)
-    static bool hwy_vert_step_wins = false;
-
-    //////////////////////////////////////////////////////////////////////////
     static
     void simd_rev_vert_step(const lifting_step* s, const line_buf* sig,
                            const line_buf* other, const line_buf* aug,
@@ -1421,12 +1416,9 @@ namespace ojph {
       if (simd == 0)
         return;
       // dispatch resolves to the best target (smaller bit values are
-      // newer); at AVX-512 class targets the hwy vertical step measured
-      // well ahead of the hand-written AVX2 survivor (176 vs 303
-      // ns/4096-sample step on a Sapphire Rapids Xeon w5-2445), while at
-      // AVX2 the survivor keeps a small edge
+      // newer)
       const int64_t best = simd & (-simd);
-      hwy_vert_step_wins = best <= HWY_AVX3;
+      const bool hwy_vert_step_wins = best <= HWY_AVX3;
 
       fb_rev_vert_step         = rev_vert_step;
       fb_rev_horz_ana          = rev_horz_ana;
@@ -1435,12 +1427,17 @@ namespace ojph {
       fb_rev_horz_ana_arb      = rev_horz_ana_arb;
       fb_rev_horz_syn_arb      = rev_horz_syn_arb;
 
-      // Measurements show the hand-written SIMD vertical step (AVX2)
-      // is slightly faster than the Highway loop of the same width, and
-      // it performs the null-step skip itself; take over the vertical
-      // step only when the Highway loop wins (AVX-512 class targets) or
-      // when the generic implementation would run otherwise (forwarding
-      // to the survivor from here costs a measurable extra dispatch).
+      // Vertical-step selection, all measurement-backed:
+      //  - AVX-512 class targets: the hwy loop, well ahead of the
+      //    hand-written AVX2 survivor there (176-237 vs 303-401
+      //    ns/4096-sample step on a Sapphire Rapids Xeon w5-2445);
+      //  - AVX2: the survivor, called directly -- it keeps a small edge
+      //    over the hwy loop of the same width (155 vs 162 ns on a Core
+      //    Ultra 7 270K; a tie on Zen 3) and performs the null-step
+      //    skip itself, and the old forwarding hop through
+      //    simd_rev_vert_step cost a measurable extra dispatch;
+      //  - below AVX2 (fallback still generic): the hwy loop, which
+      //    dispatches to its SSE4 tier.
       if (hwy_vert_step_wins || fb_rev_vert_step == gen_rev_vert_step)
         rev_vert_step          = simd_rev_vert_step;
       rev_horz_ana             = simd_rev_horz_ana;
