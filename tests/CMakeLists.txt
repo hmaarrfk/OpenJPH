@@ -48,21 +48,50 @@ add_executable(
 
 target_link_libraries(
   test_mixed_coc
-  openjph
+  ojph
+  GTest::gtest_main
+)
+
+# configure rev13 (predict-only wavelet) tests (library API tests)
+add_executable(
+  test_rev13
+  test_rev13.cpp
+)
+
+target_link_libraries(
+  test_rev13
+  ojph
+  GTest::gtest_main
+)
+
+# configure rev12 (previous-sample predict-only wavelet) tests
+add_executable(
+  test_rev12
+  test_rev12.cpp
+)
+
+target_link_libraries(
+  test_rev12
+  ojph
   GTest::gtest_main
 )
 
 include(GoogleTest)
 gtest_add_tests(TARGET test_executables)
 gtest_add_tests(TARGET test_mixed_coc)
+gtest_add_tests(TARGET test_rev13)
+gtest_add_tests(TARGET test_rev12)
 
-if (MSVC)
+# The "\$(Configuration)" paths below are Visual Studio generator syntax;
+# an MSVC-family compiler driven by a single-config generator (cl or
+# clang-cl with Ninja) takes the else branch instead.
+if (MSVC AND CMAKE_GENERATOR MATCHES "Visual Studio")
   add_custom_command(TARGET test_executables POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy "../bin/\$(Configuration)/gtest.dll" "./"
     COMMAND ${CMAKE_COMMAND} -E copy "../bin/\$(Configuration)/gtest_main.dll" "./"
     COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:ojph_compress>" "./"
     COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:ojph_expand>" "./"
-    COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:openjph>" "./"
+    COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:ojph>" "./"
   )
   add_custom_command(TARGET compare_files POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy "./\$(Configuration)/compare_files.exe" "./"
@@ -91,7 +120,15 @@ else()
     add_custom_command(TARGET test_executables POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E copy "../bin/${CMAKE_SHARED_LIBRARY_PREFIX}gtest.dll" "./"
       COMMAND ${CMAKE_COMMAND} -E copy "../bin/${CMAKE_SHARED_LIBRARY_PREFIX}gtest_main.dll" "./"
-      COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:openjph>" "./"
+      COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:ojph>" "./"
+    )
+  elseif(WIN32 AND BUILD_SHARED_LIBS)
+    # cl or clang-cl with a single-config generator (e.g. Ninja): the
+    # DLLs sit next to their targets, with no per-configuration directory
+    add_custom_command(TARGET test_executables POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:gtest>" "./"
+      COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:gtest_main>" "./"
+      COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:ojph>" "./"
     )
   endif()
-endif(MSVC)
+endif()

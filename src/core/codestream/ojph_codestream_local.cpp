@@ -570,6 +570,28 @@ namespace ojph {
       }
       siz.check_validity();
       cod.check_validity(siz);
+      if (cod.get_wavelet_kern() > local::param_cod::DWT_REV53)
+      {
+        // kernels beyond those of Part 1 need an ATK marker segment, and
+        // the SIZ marker must signal the use of Part 2 extensions
+        if (cod.get_wavelet_kern() == local::param_cod::DWT_REV13)
+        {
+          atk.init_rev13();
+          siz.set_Rsiz_flag((ui16)(local::param_siz::RSIZ_EXT_FLAG |
+                                   local::param_siz::RSIZ_WS_KERN_FLAG));
+        }
+        else if (cod.get_wavelet_kern() == local::param_cod::DWT_REV12)
+        {
+          atk.init_rev12();
+          siz.set_Rsiz_flag((ui16)(local::param_siz::RSIZ_EXT_FLAG |
+                                   local::param_siz::RSIZ_ARB_KERN_FLAG));
+        }
+        else
+          OJPH_ERROR(0x00030030, "Only the predict-only reversible "
+            "kernels (indices %d and %d) are supported beyond the Part 1 "
+            "kernels.",
+            local::param_cod::DWT_REV13, local::param_cod::DWT_REV12);
+      }
       cod.update_atk(&atk);
       qcd.check_validity(siz, cod);
       cap.check_validity(cod, qcd);
@@ -649,6 +671,12 @@ namespace ojph {
 
       if (!cap.write(file))
         OJPH_ERROR(0x00030024, "Error writing to file");
+
+      // The kernels of Part 1 (indices 0 and 1) are implied by the COD
+      // marker and must not be written to an ATK marker segment.
+      if (cod.get_wavelet_kern() > local::param_cod::DWT_REV53 &&
+          !atk.write(file))
+        OJPH_ERROR(0x00030031, "Error writing to file");
 
       if (!cod.write(file))
         OJPH_ERROR(0x00030025, "Error writing to file");

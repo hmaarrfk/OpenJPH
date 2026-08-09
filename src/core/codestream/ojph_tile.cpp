@@ -39,6 +39,7 @@
 #include <climits>
 #include <cmath>
 
+#include "ojph_arch.h"
 #include "ojph_mem.h"
 #include "ojph_params.h"
 #include "ojph_codestream_local.h"
@@ -51,6 +52,15 @@ namespace ojph {
 
   namespace local
   {
+#if defined(OJPH_ENABLE_HWY) \
+    && (defined(OJPH_ARCH_X86_64) || defined(OJPH_ARCH_I386))
+    // hwy kernel (ojph_codestream_hwy.cpp); dispatches at run time to
+    // the best compiled-in target, so calls need only be gated on one
+    // of those targets being available
+    bool hwy_tx_kernels_available();
+    void rev_convert16(const si16 *sp, si32 *dp, si32 shift, ui32 count);
+    #define OJPH_TILE_USE_HWY
+#endif
 
     //////////////////////////////////////////////////////////////////////////
     void tile::pre_alloc(codestream *codestream, const rect& tile_rect,
@@ -345,7 +355,18 @@ namespace ojph {
         assert(comp_num < num_comps);
         ui32 comp_width = comp_rects[comp_num].siz.w;
         line_buf *tc = comps[comp_num].get_line();
-        if (reversible[comp_num])
+        if (tc->flags & line_buf::LFT_16BIT)
+        {
+          // 16-bit component lines hold reversible, unsigned samples with
+          // no type-3 non-linearity (see can_use_16bit_lines); narrow
+          // while applying the level shift
+          const si32 *sp = line->i32 + line_offsets[comp_num];
+          si16 *dp = tc->i16;
+          si32 shift = (si32)((si64)1 << (num_bits[comp_num] - 1));
+          for (ui32 i = comp_width; i > 0; --i)
+            *dp++ = (si16)(*sp++ - shift);
+        }
+        else if (reversible[comp_num])
         {
           si64 shift = (si64)1 << (num_bits[comp_num] - 1);
           if (is_signed[comp_num] && nlt_type3[comp_num] == type3)
@@ -439,7 +460,24 @@ namespace ojph {
       if (!employ_color_transform || num_comps == 1)
       {
         line_buf *src_line = comps[comp_num].pull_line();
-        if (reversible[comp_num])
+        if (src_line->flags & line_buf::LFT_16BIT)
+        {
+          // 16-bit component lines hold reversible, unsigned samples with
+          // no type-3 non-linearity (see can_use_16bit_lines); widen
+          // while undoing the level shift
+          const si16 *sp = src_line->i16;
+          si32 *dp = tgt_line->i32 + line_offsets[comp_num];
+          si32 shift = (si32)((si64)1 << (num_bits[comp_num] - 1));
+#ifdef OJPH_TILE_USE_HWY
+          static const bool use_hwy = hwy_tx_kernels_available();
+          if (use_hwy)
+            rev_convert16(sp, dp, shift, comp_width);
+          else
+#endif
+          for (ui32 i = comp_width; i > 0; --i)
+            *dp++ = (si32)*sp++ + shift;
+        }
+        else if (reversible[comp_num])
         {
           si64 shift = (si64)1 << (num_bits[comp_num] - 1);
           if (is_signed[comp_num] && nlt_type3[comp_num] == type3)

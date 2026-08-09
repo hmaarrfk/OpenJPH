@@ -168,6 +168,10 @@ namespace ojph {
 
     public:
       enum : ui16 {
+        // T.801 Table A.2 capability bits
+        RSIZ_DFS_FLAG      = 0x20,  // arbitrary decomposition styles
+        RSIZ_ARB_KERN_FLAG = 0x40,  // arbitrary transformation kernels
+        RSIZ_WS_KERN_FLAG  = 0x80,  // whole-sample symmetric kernels
         RSIZ_NLT_FLAG  =  0x200,
         RSIZ_HT_FLAG   = 0x4000,
         RSIZ_EXT_FLAG  = 0x8000,
@@ -407,6 +411,14 @@ namespace ojph {
       enum dwt_type : ui8 {
         DWT_IRV97 = 0,
         DWT_REV53 = 1,
+        DWT_REV13 = 2,  // reversible predict-only kernel; the low-pass
+                        // subband holds untouched even-indexed samples.
+                        // Signaled with an ATK marker segment of index 2.
+        DWT_REV12 = 3,  // reversible predict-only kernel whose prediction
+                        // is the preceding even-indexed sample (a one-sided,
+                        // arbitrary filter); the low-pass subband holds
+                        // untouched even-indexed samples.  Signaled with an
+                        // ATK marker segment of index 3.
       };
 
     public: // COD_MAIN and COC_MAIN common functions
@@ -429,6 +441,13 @@ namespace ojph {
       {
         assert(type == UNDEFINED || type == COD_MAIN || type == COC_MAIN);
         SPcod.wavelet_trans = reversible ? DWT_REV53 : DWT_IRV97;
+      }
+
+      ////////////////////////////////////////
+      void set_wavelet_kern(ui8 kernel)
+      {
+        assert(type == UNDEFINED || type == COD_MAIN || type == COC_MAIN);
+        SPcod.wavelet_trans = kernel;
       }
 
       ////////////////////////////////////////
@@ -532,6 +551,9 @@ namespace ojph {
 
       ////////////////////////////////////////
       bool is_reversible() const;
+
+      ////////////////////////////////////////
+      bool is_predict_only() const;
 
       ////////////////////////////////////////
       bool is_employing_color_transform() const
@@ -921,7 +943,7 @@ namespace ojph {
 
       void check_validity(const param_cod& cod, const param_qcd& qcd)
       {
-        if (cod.get_wavelet_kern() == param_cod::DWT_REV53)
+        if (cod.is_reversible())
           Ccap[0] &= 0xFFDF;
         else
           Ccap[0] |= 0x0020;
@@ -1103,7 +1125,7 @@ namespace ojph {
       };
 
       struct rev_data {
-        // si8 Oatk;     // only for arbitrary filter, offset of filter
+        si8 Oatk;        // only for arbitrary filter, offset of filter
         ui8 Eatk;        // only for reversible, epsilon, the power of 2
         si16 Batk;       // only for reversible, beta, the additive residue
         // ui8 LCatk;    // number of lifting coefficients in a step
@@ -1168,6 +1190,11 @@ namespace ojph {
       }
 
       bool read(infile_base *file);
+      bool write(outfile_base *file);
+      void init_rev13();
+      void init_rev12();
+      bool is_used() const { return Latk != 0; }
+      bool is_predict_only() const;
 
       ui8 get_index() const { return (ui8)(Satk & 0xFF); }
       int get_coeff_type() const { return (Satk >> 8) & 0x7; }
@@ -1221,6 +1248,26 @@ namespace ojph {
     private: // on restart, already allocated param_atk objs are stored here
       param_atk* avail;
     };
+    ///////////////////////////////////////////////////////////////////////////
+    // True when reversible transformation lines can use 16-bit storage:
+    // the coefficients must fit in 16 bits (propose_precision accounts for
+    // the sign bit and a coder margin), and the transformation must be a
+    // predict-only arbitrary kernel, whose generic transform paths support
+    // 16-bit lines. Restricted to unsigned samples without a colour
+    // transform, so no per-sample treatment beyond the level shift applies.
+    static inline bool can_use_16bit_lines(const param_qcd* qp,
+                                           const param_cod* cdp,
+                                           const param_siz* sz,
+                                           ui32 comp_num)
+    {
+      const param_atk* atk = cdp->access_atk();
+      return atk != NULL && atk->is_reversible() &&
+             qp->propose_precision(cdp) <= 16 &&
+             atk->is_whole_sample() == false && atk->is_predict_only() &&
+             cdp->is_employing_color_transform() == false &&
+             sz->is_signed(comp_num) == false;
+    }
+
   } // !local namespace
 } // !ojph namespace
 

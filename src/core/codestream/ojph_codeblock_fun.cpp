@@ -58,100 +58,65 @@ namespace ojph {
 
     //////////////////////////////////////////////////////////////////////////
     void gen_mem_clear(void* addr, size_t count);
-    void sse_mem_clear(void* addr, size_t count);
-    void avx_mem_clear(void* addr, size_t count);
-    void wasm_mem_clear(void* addr, size_t count);
-    void vsx_mem_clear(void* addr, size_t count);
 
     //////////////////////////////////////////////////////////////////////////
     ui32  gen_find_max_val32(ui32* address);
-    ui32 sse2_find_max_val32(ui32* address);
-    ui32 avx2_find_max_val32(ui32* address);
-    ui32 wasm_find_max_val32(ui32* address);
-    ui32 vsx_find_max_val32(ui32* address);
     ui64  gen_find_max_val64(ui64* address);
-    ui64 sse2_find_max_val64(ui64* address);
-    ui64 avx2_find_max_val64(ui64* address);
-    ui64 wasm_find_max_val64(ui64* address);
-    ui64 vsx_find_max_val64(ui64* address);
-
 
     //////////////////////////////////////////////////////////////////////////
     void  gen_rev_tx_to_cb32(const void *sp, ui32 *dp, ui32 K_max,
                              float delta_inv, ui32 count, ui32* max_val);
-    void sse2_rev_tx_to_cb32(const void *sp, ui32 *dp, ui32 K_max,
-                             float delta_inv, ui32 count, ui32* max_val);
-    void avx2_rev_tx_to_cb32(const void *sp, ui32 *dp, ui32 K_max,
-                             float delta_inv, ui32 count, ui32* max_val);
     void  gen_irv_tx_to_cb32(const void *sp, ui32 *dp, ui32 K_max,
                              float delta_inv, ui32 count, ui32* max_val);
-    void sse2_irv_tx_to_cb32(const void *sp, ui32 *dp, ui32 K_max,
-                             float delta_inv, ui32 count, ui32* max_val);
-    void avx2_irv_tx_to_cb32(const void *sp, ui32 *dp, ui32 K_max,
-                             float delta_inv, ui32 count, ui32* max_val);
-    void wasm_rev_tx_to_cb32(const void *sp, ui32 *dp, ui32 K_max,
-                             float delta_inv, ui32 count, ui32* max_val);
-    void vsx_rev_tx_to_cb32(const void *sp, ui32 *dp, ui32 K_max,
-                            float delta_inv, ui32 count, ui32* max_val);
-    void wasm_irv_tx_to_cb32(const void *sp, ui32 *dp, ui32 K_max,
-                             float delta_inv, ui32 count, ui32* max_val);
-    void vsx_irv_tx_to_cb32(const void *sp, ui32 *dp, ui32 K_max,
-                            float delta_inv, ui32 count, ui32* max_val);
-
     void  gen_rev_tx_to_cb64(const void *sp, ui64 *dp, ui32 K_max,
                              float delta_inv, ui32 count, ui64* max_val);
-    void sse2_rev_tx_to_cb64(const void *sp, ui64 *dp, ui32 K_max,
-                             float delta_inv, ui32 count, ui64* max_val);
-    void avx2_rev_tx_to_cb64(const void *sp, ui64 *dp, ui32 K_max,
-                             float delta_inv, ui32 count, ui64* max_val);
-    void wasm_rev_tx_to_cb64(const void *sp, ui64 *dp, ui32 K_max,
-                             float delta_inv, ui32 count, ui64* max_val);
-    void vsx_rev_tx_to_cb64(const void *sp, ui64 *dp, ui32 K_max,
-                            float delta_inv, ui32 count, ui64* max_val);
 
     //////////////////////////////////////////////////////////////////////////
+    void  gen_rev_tx_from_cb16(const ui32 *sp, si16 *dp, ui32 K_max,
+                               ui32 count);
     void  gen_rev_tx_from_cb32(const ui32 *sp, void *dp, ui32 K_max,
-                               float delta, ui32 count);
-    void sse2_rev_tx_from_cb32(const ui32 *sp, void *dp, ui32 K_max,
-                               float delta, ui32 count);
-    void avx2_rev_tx_from_cb32(const ui32 *sp, void *dp, ui32 K_max,
                                float delta, ui32 count);
     void  gen_irv_tx_from_cb32(const ui32 *sp, void *dp, ui32 K_max,
                                float delta, ui32 count);
-    void sse2_irv_tx_from_cb32(const ui32 *sp, void *dp, ui32 K_max,
-                               float delta, ui32 count);
-    void avx2_irv_tx_from_cb32(const ui32 *sp, void *dp, ui32 K_max,
-                               float delta, ui32 count);
-    void wasm_rev_tx_from_cb32(const ui32 *sp, void *dp, ui32 K_max,
-                               float delta, ui32 count);
-    void vsx_rev_tx_from_cb32(const ui32 *sp, void *dp, ui32 K_max,
-                              float delta, ui32 count);
-    void wasm_irv_tx_from_cb32(const ui32 *sp, void *dp, ui32 K_max,
-                               float delta, ui32 count);
-    void vsx_irv_tx_from_cb32(const ui32 *sp, void *dp, ui32 K_max,
-                              float delta, ui32 count);
-
     void  gen_rev_tx_from_cb64(const ui64 *sp, void *dp, ui32 K_max,
                                float delta, ui32 count);
-    void sse2_rev_tx_from_cb64(const ui64 *sp, void *dp, ui32 K_max,
+    void  gen_irv_tx_from_cb64(const ui64 *sp, void *dp, ui32 K_max,
                                float delta, ui32 count);
-    void avx2_rev_tx_from_cb64(const ui64 *sp, void *dp, ui32 K_max,
+
+#if defined(OJPH_ARCH_X86_64) || defined(OJPH_ARCH_I386)
+    //////////////////////////////////////////////////////////////////////////
+    // the one hand-written kernel kept (measured faster than its Highway
+    // equivalent; see ojph_codestream_avx2.cpp)
+    void avx2_rev_tx_from_cb32(const ui32 *sp, void *dp, ui32 K_max,
                                float delta, ui32 count);
-    void gen_irv_tx_from_cb64(const ui64 *sp, void *dp, ui32 K_max,
-                              float delta, ui32 count);
-    void wasm_rev_tx_from_cb64(const ui64 *sp, void *dp, ui32 K_max,
+#endif
+
+#ifdef OJPH_ENABLE_HWY
+    //////////////////////////////////////////////////////////////////////////
+    bool  hwy_encoder_available();
+    bool  hwy_tx_kernels_available();
+    bool  hwy_tx_kernels_use_avx3();
+    ui32  find_max_val32(ui32* address);
+    void  rev_tx_from_cb16(const ui32 *sp, si16 *dp, ui32 K_max,
+                               ui32 count);
+    void  rev_tx_from_cb32(const ui32 *sp, void *dp, ui32 K_max,
                                float delta, ui32 count);
-    void vsx_rev_tx_from_cb64(const ui64 *sp, void *dp, ui32 K_max,
-                              float delta, ui32 count);
+    void  rev_tx_to_cb32(const void *sp, ui32 *dp, ui32 K_max,
+                             float delta_inv, ui32 count, ui32* max_val);
+    void  irv_tx_to_cb32(const void *sp, ui32 *dp, ui32 K_max,
+                             float delta_inv, ui32 count, ui32* max_val);
+    void  irv_tx_from_cb32(const ui32 *sp, void *dp, ui32 K_max,
+                               float delta, ui32 count);
+#endif
 
     void codeblock_fun::init(bool reversible) {
 
-#if !defined(OJPH_ENABLE_WASM_SIMD) || !defined(OJPH_EMSCRIPTEN)
-
-      // Default path, no acceleration.  We may change this later
+      // The default path: the generic C++ implementations, which serve
+      // all architectures.
       decode_cb32 = ojph_decode_codeblock32;
       find_max_val32 = gen_find_max_val32;
       mem_clear = gen_mem_clear;
+      tx_from_cb16 = gen_rev_tx_from_cb16;
       if (reversible) {
         tx_to_cb32 = gen_rev_tx_to_cb32;
         tx_from_cb32 = gen_rev_tx_from_cb32;
@@ -182,155 +147,66 @@ namespace ojph {
 
     #if (defined(OJPH_ARCH_X86_64) || defined(OJPH_ARCH_I386))
 
-      // Accelerated functions for INTEL/AMD CPUs
-      #ifndef OJPH_DISABLE_SSE
-        if (get_cpu_ext_level() >= X86_CPU_EXT_LEVEL_SSE)
-          mem_clear = sse_mem_clear;
-      #endif // !OJPH_DISABLE_SSE
-
-      #ifndef OJPH_DISABLE_SSE2
-        if (get_cpu_ext_level() >= X86_CPU_EXT_LEVEL_SSE2) {
-          find_max_val32 = sse2_find_max_val32;
-          if (reversible) {
-            tx_to_cb32 = sse2_rev_tx_to_cb32;
-            tx_from_cb32 = sse2_rev_tx_from_cb32;
-          }
-          else {
-            tx_to_cb32 = sse2_irv_tx_to_cb32;
-            tx_from_cb32 = sse2_irv_tx_from_cb32;
-          }
-          find_max_val64 = sse2_find_max_val64;
-          if (reversible) {
-            tx_to_cb64 = sse2_rev_tx_to_cb64;
-            tx_from_cb64 = sse2_rev_tx_from_cb64;
-          }
-          else
-          {
-            tx_to_cb64 = NULL;
-            tx_from_cb64 = gen_irv_tx_from_cb64;
-          }
-        }
-      #endif // !OJPH_DISABLE_SSE2
-
-      #ifndef OJPH_DISABLE_SSSE3
-        if (get_cpu_ext_level() >= X86_CPU_EXT_LEVEL_SSSE3)
-          decode_cb32 = ojph_decode_codeblock_ssse3;
-      #endif // !OJPH_DISABLE_SSSE3
-
-      #ifndef OJPH_DISABLE_AVX
-        if (get_cpu_ext_level() >= X86_CPU_EXT_LEVEL_AVX)
-          mem_clear = avx_mem_clear;
-      #endif // !OJPH_DISABLE_AVX
-
-      #ifndef OJPH_DISABLE_AVX2
-        if (get_cpu_ext_level() >= X86_CPU_EXT_LEVEL_AVX2) {
-          decode_cb32 = ojph_decode_codeblock_avx2;
-          find_max_val32 = avx2_find_max_val32;
-          if (reversible) {
-            tx_to_cb32 = avx2_rev_tx_to_cb32;
-            tx_from_cb32 = avx2_rev_tx_from_cb32;
-          }
-          else {
-            tx_to_cb32 = avx2_irv_tx_to_cb32;
-            tx_from_cb32 = avx2_irv_tx_from_cb32;
-          }
-          encode_cb32 = ojph_encode_codeblock_avx2;
-          bool result = initialize_block_encoder_tables_avx2();
-          assert(result); ojph_unused(result);
-
-          find_max_val64 = avx2_find_max_val64;
-          if (reversible) {
-            tx_to_cb64 = avx2_rev_tx_to_cb64;
-            tx_from_cb64 = avx2_rev_tx_from_cb64;
-          }
-          else
-          {
-            tx_to_cb64 = NULL;
-            tx_from_cb64 = gen_irv_tx_from_cb64;
-          }
-        }
-      #endif // !OJPH_DISABLE_AVX2
-
-      #if (defined(OJPH_ARCH_X86_64) && !defined(OJPH_DISABLE_AVX512))
-        if (get_cpu_ext_level() >= X86_CPU_EXT_LEVEL_AVX512) {
-          encode_cb32 = ojph_encode_codeblock_avx512;
-          bool result = initialize_block_encoder_tables_avx512();
-          assert(result); ojph_unused(result);
-        }
-      #endif // !OJPH_DISABLE_AVX512
-
-    #elif defined(OJPH_ARCH_ARM)
-
-    #elif defined(OJPH_ARCH_PPC64LE)
-
-      // 128-bit VSX kernels; see ojph_simd_vsx.h.
-      // The SIMD block decoder is used everywhere on POWER10 (ISA 3.1),
-      // where it beats the scalar decoder on all measured content.  On
-      // POWER9 it wins for irreversible content (more magnitude bits
-      // per sample) but trails the scalar decoder slightly on
-      // reversible content, so it is dispatched only for the former.
-      if (get_cpu_ext_level() >= PPC_CPU_EXT_LEVEL_ARCH_3_1 ||
-          (!reversible &&
-           get_cpu_ext_level() >= PPC_CPU_EXT_LEVEL_ARCH_3_00))
-        decode_cb32 = ojph_decode_codeblock_vsx;
-      if (get_cpu_ext_level() >= PPC_CPU_EXT_LEVEL_ARCH_3_00) {
-        find_max_val32 = vsx_find_max_val32;
-        mem_clear = vsx_mem_clear;
-        if (reversible) {
-          tx_to_cb32 = vsx_rev_tx_to_cb32;
-          tx_from_cb32 = vsx_rev_tx_from_cb32;
-        }
-        else {
-          tx_to_cb32 = vsx_irv_tx_to_cb32;
-          tx_from_cb32 = vsx_irv_tx_from_cb32;
-        }
-        find_max_val64 = vsx_find_max_val64;
-        if (reversible) {
-          tx_to_cb64 = vsx_rev_tx_to_cb64;
-          tx_from_cb64 = vsx_rev_tx_from_cb64;
-        }
-        else {
-          tx_to_cb64 = NULL;
-          tx_from_cb64 = gen_irv_tx_from_cb64;
-        }
+      // The two hand-written AVX2 survivors; both measured faster than
+      // their Highway equivalents.
+      if (get_cpu_ext_level() >= X86_CPU_EXT_LEVEL_AVX2) {
+        decode_cb32 = ojph_decode_codeblock_avx2;
+        if (reversible)
+          tx_from_cb32 = avx2_rev_tx_from_cb32;
       }
 
-    #endif // !(defined(OJPH_ARCH_X86_64) || defined(OJPH_ARCH_I386))
+      #ifdef OJPH_ENABLE_HWY
+        // init() runs for every codeblock, and each predicate queries
+        // hwy::SupportedTargets(), which costs a few hundred cycles per
+        // call; evaluate them once (thread-safe magic statics).  Target
+        // forcing (hwy::DisableTargets) always precedes the first
+        // codestream operation, so a one-time decision is safe -- the
+        // same trade tile.cpp makes with its use_hwy static.
+        static const bool encoder_available = hwy_encoder_available();
+        static const bool tx_available = hwy_tx_kernels_available();
+        static const bool tx_use_avx3 = hwy_tx_kernels_use_avx3();
+
+        // The block encoder is compiled once per x86 target and picks
+        // the best one at run time (hwy dynamic dispatch), so SSE4-class
+        // CPUs are enough to use it; MSVC builds it for a single static
+        // AVX2 target, which its predicate gates on AVX2.
+        if (encoder_available) {
+          encode_cb32 = ojph_encode_codeblock_simd;
+          bool result = initialize_block_encoder_tables_simd();
+          assert(result); ojph_unused(result);
+        }
+
+        // The Highway data-movement kernels dispatch at run time to the
+        // best compiled-in target (SSE4, AVX2, AVX3, ...); install them
+        // whenever any of those targets is available.
+        if (tx_available) {
+          tx_from_cb16 = rev_tx_from_cb16;
+          // the hwy tx_to_cb32 kernels accumulate max_val as a vector,
+          // so pair them with the matching reduction (qualified, because
+          // the member of the same name shadows the free function here)
+          find_max_val32 = local::find_max_val32;
+          if (reversible) {
+            tx_to_cb32 = rev_tx_to_cb32;
+            // the hand-written avx2_rev_tx_from_cb32 survivor keeps a
+            // small edge on AVX2-class CPUs (43.0 vs 43.7 ns/1024 on a
+            // Core Ultra 7 270K); the hwy kernel covers the SSE4-class
+            // CPUs below it and wins clearly once an AVX-512 target is
+            // available (40.7 vs 63.3 ns/1024 on a Sapphire Rapids
+            // Xeon w5-2445)
+            if (get_cpu_ext_level() < X86_CPU_EXT_LEVEL_AVX2 ||
+                tx_use_avx3)
+              tx_from_cb32 = rev_tx_from_cb32;
+          }
+          else {
+            tx_to_cb32 = irv_tx_to_cb32;
+            tx_from_cb32 = irv_tx_from_cb32;
+          }
+        }
+      #endif // OJPH_ENABLE_HWY
+
+    #endif // OJPH_ARCH_X86_64 || OJPH_ARCH_I386
 
   #endif // !OJPH_DISABLE_SIMD
-
-#else // OJPH_ENABLE_WASM_SIMD
-
-      // Accelerated functions for WASM SIMD.
-      decode_cb32 = ojph_decode_codeblock_wasm;
-      find_max_val32 = wasm_find_max_val32;
-      mem_clear = wasm_mem_clear;
-      if (reversible) {
-        tx_to_cb32 = wasm_rev_tx_to_cb32;
-        tx_from_cb32 = wasm_rev_tx_from_cb32;
-      }
-      else {
-        tx_to_cb32 = wasm_irv_tx_to_cb32;
-        tx_from_cb32 = wasm_irv_tx_from_cb32;
-      }
-      encode_cb32 = ojph_encode_codeblock32;
-
-      decode_cb64 = ojph_decode_codeblock64;
-      find_max_val64 = wasm_find_max_val64;
-      if (reversible) {
-        tx_to_cb64 = wasm_rev_tx_to_cb64;
-        tx_from_cb64 = wasm_rev_tx_from_cb64;
-      }
-      else
-      {
-        tx_to_cb64 = NULL;
-        tx_from_cb64 = gen_irv_tx_from_cb64;
-      }
-      encode_cb64 = ojph_encode_codeblock64;
-      bool result = initialize_block_encoder_tables();
-      assert(result); ojph_unused(result);
-
-#endif // !OJPH_ENABLE_WASM_SIMD
 
     }
   }  // local

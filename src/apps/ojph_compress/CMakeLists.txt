@@ -25,17 +25,13 @@ else()
       OR ("${OJPH_TARGET_ARCH}" MATCHES "OJPH_ARCH_I386")
       OR MULTI_GEN_X86_64)
 
-      if (NOT OJPH_DISABLE_SSE4)
-        list(APPEND SOURCES ${OJPH_IMG_IO_SSE4})
-        source_group("others" FILES ${OJPH_IMG_IO_SSE4})
-      endif()
-      if (NOT OJPH_DISABLE_AVX2)
-        list(APPEND SOURCES ${OJPH_IMG_IO_AVX2})
-        source_group("others" FILES ${OJPH_IMG_IO_AVX2})
-      endif()
+      list(APPEND SOURCES ${OJPH_IMG_IO_SSE4})
+      source_group("others" FILES ${OJPH_IMG_IO_SSE4})
+      list(APPEND SOURCES ${OJPH_IMG_IO_AVX2})
+      source_group("others" FILES ${OJPH_IMG_IO_AVX2})
 
-      # Set compilation flags
-      if (MSVC)
+      # Set compilation flags; clang-cl takes the GCC/Clang branch
+      if (OJPH_COMPILER_MSVC_TRUE)
         set_source_files_properties(${OJPH_IMG_IO_AVX2} PROPERTIES COMPILE_FLAGS "/arch:AVX2")
       else()
         set_source_files_properties(${OJPH_IMG_IO_SSE4} PROPERTIES COMPILE_FLAGS -msse4.1)
@@ -53,6 +49,7 @@ endif()
 
 add_executable(ojph_compress ${SOURCES})
 target_include_directories(ojph_compress PRIVATE ../common)
-target_link_libraries(ojph_compress PRIVATE openjph $<TARGET_NAME_IF_EXISTS:TIFF::TIFF>)
+target_link_libraries(ojph_compress PRIVATE ojph $<TARGET_NAME_IF_EXISTS:TIFF::TIFF>)
 
+set_target_properties(ojph_compress PROPERTIES OUTPUT_NAME ojphf_compress)
 install(TARGETS ojph_compress)

@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.12.0)
 include(ojph_version.cmake)
 
 ## project
-project (openjph VERSION ${OPENJPH_VERSION} DESCRIPTION "Open source implementation of JPH" LANGUAGES C CXX)
+project (ojph VERSION ${OPENJPH_VERSION} DESCRIPTION "ojph, a fork of OpenJPH, co-installable with it" LANGUAGES C CXX)
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 
 ################################################################################################
@@ -35,6 +35,43 @@ if (CMAKE_OSX_ARCHITECTURES)
   unset(arm64_index)
 endif()
 
+## Distinguish the real MSVC compiler (cl.exe) from clang-cl
+# CMake sets MSVC=TRUE for every compiler that accepts an MSVC-style
+# command line, which includes clang-cl (LLVM's MSVC-compatible driver).
+# The two differ where it matters for SIMD: cl.exe has no per-function
+# target attributes, so Google Highway cannot compile targets beyond the
+# translation unit's /arch level (and hwy disables its AVX-512 targets on
+# MSVC as broken), while clang-cl compiles the same attribute-based
+# multiversioning as GCC/Clang and reaches every x86 target.  clang-cl
+# accepts GCC-style -m machine flags, so it takes the GCC/Clang flag
+# spelling below; only true MSVC keeps the /arch:AVX2 spelling.
+# CMAKE_CXX_COMPILER_FRONTEND_VARIANT requires CMake >= 3.14; on older
+# CMake it is empty and clang-cl falls back to the (safe, degraded)
+# true-MSVC /arch:AVX2 path.
+set(OJPH_COMPILER_CLANG_CL FALSE)
+if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang"
+    AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+  set(OJPH_COMPILER_CLANG_CL TRUE)
+  message(STATUS "Compiler is clang-cl (Clang with MSVC-compatible driver)")
+endif()
+if (MSVC AND NOT OJPH_COMPILER_CLANG_CL)
+  set(OJPH_COMPILER_MSVC_TRUE TRUE)
+else()
+  set(OJPH_COMPILER_MSVC_TRUE FALSE)
+endif()
+
+# Spelling of -ffp-contract=off per driver: the clang-cl driver ignores
+# bare -f flags it does not know ("unknown argument ignored in clang-cl"),
+# but forwards anything given via /clang: to the GCC-style driver.  The
+# flag keeps float (irv/ICT) kernels from fusing mul+add into fma so their
+# output stays byte-identical to the generic implementation; losing it
+# silently would break codestream parity, hence the explicit spelling.
+if (OJPH_COMPILER_CLANG_CL)
+  set(OJPH_FFP_CONTRACT_OFF "/clang:-ffp-contract=off")
+else()
+  set(OJPH_FFP_CONTRACT_OFF "-ffp-contract=off")
+endif()
+
 ## options
 option(BUILD_SHARED_LIBS "Shared Libraries" ON)
 option(OJPH_ENABLE_TIFF_SUPPORT "Enables input and output support for TIFF files" ON)
@@ -44,14 +81,10 @@ option(OJPH_BUILD_STREAM_EXPAND "Enables building ojph_stream_expand executable"
 option(OJPH_BUILD_FUZZER "Enables building oss-fuzzing target executable" OFF)
 
 option(OJPH_DISABLE_SIMD "Disables the use of SIMD instructions -- agnostic to architectures" OFF)
-option(OJPH_DISABLE_SSE "Disables the use of SSE SIMD instructions and associated files" OFF)
-option(OJPH_DISABLE_SSE2 "Disables the use of SSE2 SIMD instructions and associated files" OFF)
-option(OJPH_DISABLE_SSSE3 "Disables the use of SSSE3 SIMD instructions and associated files" OFF)
-option(OJPH_DISABLE_SSE4 "Disables the use of SSE4 SIMD instructions and associated files" OFF)
-option(OJPH_DISABLE_AVX "Disables the use of AVX SIMD instructions and associated files" OFF)
-option(OJPH_DISABLE_AVX2 "Disables the use of AVX2 SIMD instructions and associated files" OFF)
-option(OJPH_DISABLE_AVX512 "Disables the use of AVX512 SIMD instructions and associated files" OFF)
-option(OJPH_DISABLE_NEON "Disables the use of NEON SIMD instructions and associated files" OFF)
+
+option(OJPH_ENABLE_HWY "Enables Google Highway (hwy) SIMD kernels; auto-disabled when the hwy headers are not found" ON)
+
+option(OJPH_REQUIRE_HWY "Fail the configure step when the Google Highway headers cannot be found, instead of silently building without them" OFF)
 
 ## options that are being deprecated
 if (DEFINED OJPH_DISABLE_INTEL_SIMD)
@@ -62,16 +95,94 @@ if (DEFINED OJPH_DISABLE_INTEL_SIMD)
   message(STATUS "OJPH_DISABLE_SIMD is set to ${OJPH_DISABLE_SIMD}")
   unset(OJPH_DISABLE_INTEL_SIMD)
 endif()
-if (DEFINED OJPH_ENABLE_INTEL_AVX512)
-  message(STATUS "OJPH_ENABLE_INTEL_AVX512 is being deprecated, use \"OJPH_DISABLE_AVX512\" instead."
-                 "If you do not specify any, the default is OJPH_DISABLE_AVX512=OFF.")
-  if (OJPH_ENABLE_INTEL_AVX512)
-    set(OJPH_DISABLE_AVX512 OFF)
+
+## Google Highway detection
+# The hwy kernels are x86-only for now (they use x86-only Highway APIs such
+# as NearestIntInRange, and the dispatch sites are x86-gated), so other
+# architectures build the generic kernels. That is an expected configuration,
+# not a failure: OJPH_REQUIRE_HWY only enforces hwy where it can exist.
+if (OJPH_ENABLE_HWY AND NOT (("${OJPH_TARGET_ARCH}" MATCHES "OJPH_ARCH_X86_64")
+                             OR ("${OJPH_TARGET_ARCH}" MATCHES "OJPH_ARCH_I386")))
+  message(STATUS "The hwy kernels are currently x86-only; building the "
+                 "generic kernels for ${OJPH_TARGET_ARCH}")
+  set(OJPH_ENABLE_HWY OFF)
+  set(OJPH_REQUIRE_HWY OFF)
+endif()
+if (OJPH_ENABLE_HWY)
+  find_path(OJPH_HWY_INCLUDE_DIR NAMES hwy/highway.h
+            HINTS $ENV{CONDA_PREFIX}/include)
+  if (OJPH_HWY_INCLUDE_DIR)
+    # The kernels use APIs newer than some distribution packages (e.g.
+    # NearestIntInRange, absent from Ubuntu's libhwy 1.0.x), so probe the
+    # found headers for what is actually needed instead of trusting a
+    # version number. Highway needs C++11+, but some compilers (AppleClang)
+    # default to an older standard, so pin the probe to the standard the
+    # kernels build with; without this the probe fails spuriously and
+    # reports usable headers as too old.
+    include(CheckCXXSourceCompiles)
+    set(CMAKE_REQUIRED_INCLUDES "${OJPH_HWY_INCLUDE_DIR}")
+    if (OJPH_COMPILER_MSVC_TRUE)
+      set(CMAKE_REQUIRED_FLAGS "/std:c++17")
+    else()
+      set(CMAKE_REQUIRED_FLAGS "-std=c++17")
+    endif()
+    check_cxx_source_compiles("
+      #include <hwy/highway.h>
+      namespace hn = hwy::HWY_NAMESPACE;
+      int main() {
+        const hn::ScalableTag<int> di;
+        const hn::ScalableTag<float> df;
+        return (int)hn::GetLane(hn::NearestIntInRange(di, hn::Zero(df)));
+      }" OJPH_HWY_IS_USABLE)
+    unset(CMAKE_REQUIRED_INCLUDES)
+    unset(CMAKE_REQUIRED_FLAGS)
+    if (NOT OJPH_HWY_IS_USABLE)
+      if (OJPH_REQUIRE_HWY)
+        message(FATAL_ERROR "Google Highway headers at "
+                            "${OJPH_HWY_INCLUDE_DIR} are too old for the "
+                            "hwy kernels and OJPH_REQUIRE_HWY is ON; "
+                            "install a recent libhwy (>= 1.2) or point "
+                            "OJPH_HWY_INCLUDE_DIR at one")
+      endif()
+      message(STATUS "Google Highway headers at ${OJPH_HWY_INCLUDE_DIR} "
+                     "are too old for the hwy kernels; disabling "
+                     "OJPH_ENABLE_HWY")
+      set(OJPH_ENABLE_HWY OFF)
+      set(OJPH_HWY_INCLUDE_DIR "" CACHE PATH "" FORCE)
+    else()
+      message(STATUS "Google Highway headers found: ${OJPH_HWY_INCLUDE_DIR}")
+      # The hwy kernels use run-time dispatch (foreach_target.h), whose
+      # target selection lives in the hwy library, so headers alone are
+      # no longer enough.
+      find_library(OJPH_HWY_LIBRARY hwy
+        HINTS ENV CONDA_PREFIX ENV HWY_ROOT
+        PATH_SUFFIXES lib)
+      if (NOT OJPH_HWY_LIBRARY)
+        if (OJPH_REQUIRE_HWY)
+          message(FATAL_ERROR "The Google Highway library (libhwy) was "
+                              "not found and OJPH_REQUIRE_HWY is ON; the "
+                              "hwy kernels dispatch at run time and need "
+                              "the library, not just the headers")
+        endif()
+        message(STATUS "Google Highway library (libhwy) not found; the "
+                       "hwy kernels dispatch at run time and need it, so "
+                       "disabling OJPH_ENABLE_HWY")
+        set(OJPH_ENABLE_HWY OFF)
+        set(OJPH_HWY_INCLUDE_DIR "" CACHE PATH "" FORCE)
+      endif()
+    endif()
   else()
-    set(OJPH_DISABLE_AVX512 ON)
+    if (OJPH_REQUIRE_HWY)
+      message(FATAL_ERROR "Google Highway headers not found and "
+                          "OJPH_REQUIRE_HWY is ON; install libhwy or point "
+                          "OJPH_HWY_INCLUDE_DIR at the Highway headers")
+    endif()
+    message(STATUS "Google Highway headers not found; "
+                   "disabling OJPH_ENABLE_HWY")
+    set(OJPH_ENABLE_HWY OFF)
   endif()
-  message(STATUS "OJPH_DISABLE_AVX512 is set to ${OJPH_DISABLE_AVX512}")
-  unset(OJPH_ENABLE_INTEL_AVX512)
+elseif (OJPH_REQUIRE_HWY)
+  message(FATAL_ERROR "OJPH_REQUIRE_HWY is ON but OJPH_ENABLE_HWY is OFF")
 endif()
 
 ## Setting some of the options if EMSCRIPTEN is the compiler
@@ -154,31 +265,6 @@ endif()
 ## Enhanced instruction options
 if (OJPH_DISABLE_SIMD)
   add_compile_definitions(OJPH_DISABLE_SIMD)
-else()
-  if(OJPH_DISABLE_SSE)
-    add_compile_definitions(OJPH_DISABLE_SSE)
-  endif()
-  if(OJPH_DISABLE_SSE2)
-    add_compile_definitions(OJPH_DISABLE_SSE2)
-  endif()
-  if(OJPH_DISABLE_SSSE3)
-    add_compile_definitions(OJPH_DISABLE_SSSE3)
-  endif()
-  if(OJPH_DISABLE_SSE4)
-    add_compile_definitions(OJPH_DISABLE_SSE4)
-  endif()
-  if(OJPH_DISABLE_AVX)
-    add_compile_definitions(OJPH_DISABLE_AVX)
-  endif()
-  if(OJPH_DISABLE_AVX2)
-    add_compile_definitions(OJPH_DISABLE_AVX2)
-  endif()
-  if(OJPH_DISABLE_AVX512)
-    add_compile_definitions(OJPH_DISABLE_AVX512)
-  endif()
-  if(OJPH_DISABLE_NEON)
-    add_compile_definitions(OJPH_DISABLE_NEON)
-  endif()
 endif()
 
 ## Build library and applications
@@ -192,23 +278,23 @@ endif()
 # Install
 ################################################################################################
 
-install(EXPORT openjph-targets
-  DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/openjph
+install(EXPORT ojph-targets
+  DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ojph
 )
 
 include(CMakePackageConfigHelpers)
 
-configure_package_config_file(${CMAKE_CURRENT_SOURCE_DIR}/src/openjph-config.cmake.in
-  "${CMAKE_CURRENT_BINARY_DIR}/openjph-config.cmake"
-  INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/openjph
+configure_package_config_file(${CMAKE_CURRENT_SOURCE_DIR}/src/ojph-config.cmake.in
+  "${CMAKE_CURRENT_BINARY_DIR}/ojph-config.cmake"
+  INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ojph
 )
 
-write_basic_package_version_file(${CMAKE_CURRENT_BINARY_DIR}/openjph-config-version.cmake
+write_basic_package_version_file(${CMAKE_CURRENT_BINARY_DIR}/ojph-config-version.cmake
                                  COMPATIBILITY SameMinorVersion)
 
-install(FILES ${CMAKE_CURRENT_BINARY_DIR}/openjph-config.cmake
-              ${CMAKE_CURRENT_BINARY_DIR}/openjph-config-version.cmake
-  DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/openjph
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/ojph-config.cmake
+              ${CMAKE_CURRENT_BINARY_DIR}/ojph-config-version.cmake
+  DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ojph
 )
 
 if(IS_ABSOLUTE "${CMAKE_INSTALL_INCLUDEDIR}")
@@ -224,7 +310,7 @@ else()
 endif()
 
 configure_file(
-  "${CMAKE_CURRENT_SOURCE_DIR}/src/openjph.pc.in"
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/ojph.pc.in"
   "${CMAKE_BINARY_DIR}/${PROJECT_NAME}.pc"
   @ONLY
 )

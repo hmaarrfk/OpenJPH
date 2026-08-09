@@ -1,31 +1,19 @@
 
 file(GLOB CODESTREAM       "codestream/*.cpp" "codestream/*.h")
-file(GLOB CODESTREAM_SSE   "codestream/*_sse.cpp")
-file(GLOB CODESTREAM_SSE2  "codestream/*_sse2.cpp")
-file(GLOB CODESTREAM_AVX   "codestream/*_avx.cpp")
+file(GLOB CODESTREAM_HWY   "codestream/*_hwy.cpp")
 file(GLOB CODESTREAM_AVX2  "codestream/*_avx2.cpp")
-file(GLOB CODESTREAM_WASM  "codestream/*_wasm.cpp")
-file(GLOB CODESTREAM_VSX   "codestream/*_vsx.cpp")
 file(GLOB CODING           "coding/*.cpp" "coding/*.h")
-file(GLOB CODING_SSSE3     "coding/*_ssse3.cpp")
-file(GLOB CODING_WASM      "coding/*_wasm.cpp")
 file(GLOB CODING_AVX2      "coding/*_avx2.cpp")
-file(GLOB CODING_AVX512    "coding/*_avx512.cpp")
-file(GLOB CODING_VSX       "coding/*_vsx.cpp")
+file(GLOB CODING_HWY       "coding/*_hwy.cpp")
 file(GLOB COMMON           "openjph/*.h")
 file(GLOB OTHERS           "others/*.cpp" "others/*.c")
 file(GLOB TRANSFORM        "transform/*.cpp" "transform/*.h")
-file(GLOB TRANSFORM_SSE    "transform/*_sse.cpp")
-file(GLOB TRANSFORM_SSE2   "transform/*_sse2.cpp")
-file(GLOB TRANSFORM_AVX    "transform/*_avx.cpp")
 file(GLOB TRANSFORM_AVX2   "transform/*_avx2.cpp")
-file(GLOB TRANSFORM_AVX512 "transform/*_avx512.cpp")
-file(GLOB TRANSFORM_WASM   "transform/*_wasm.cpp")
-file(GLOB TRANSFORM_VSX    "transform/*_vsx.cpp")
+file(GLOB TRANSFORM_HWY    "transform/*_hwy.cpp")
 
-list(REMOVE_ITEM CODESTREAM ${CODESTREAM_SSE} ${CODESTREAM_SSE2} ${CODESTREAM_AVX} ${CODESTREAM_AVX2} ${CODESTREAM_WASM} ${CODESTREAM_VSX})
-list(REMOVE_ITEM CODING ${CODING_SSSE3} ${CODING_WASM} ${CODING_AVX2} ${CODING_AVX512} ${CODING_VSX})
-list(REMOVE_ITEM TRANSFORM ${TRANSFORM_SSE} ${TRANSFORM_SSE2} ${TRANSFORM_AVX} ${TRANSFORM_AVX2} ${TRANSFORM_AVX512} ${TRANSFORM_WASM} ${TRANSFORM_VSX})
+list(REMOVE_ITEM CODESTREAM ${CODESTREAM_HWY} ${CODESTREAM_AVX2})
+list(REMOVE_ITEM CODING ${CODING_AVX2} ${CODING_HWY})
+list(REMOVE_ITEM TRANSFORM ${TRANSFORM_AVX2} ${TRANSFORM_HWY})
 list(APPEND SOURCES ${CODESTREAM} ${CODING} ${COMMON} ${OTHERS} ${TRANSFORM})
 
 source_group("codestream"        FILES ${CODESTREAM})
@@ -34,107 +22,119 @@ source_group("common"            FILES ${COMMON})
 source_group("others"            FILES ${OTHERS})
 source_group("transform"         FILES ${TRANSFORM})
 
-if(EMSCRIPTEN)
-  if (OJPH_ENABLE_WASM_SIMD)
-    list(APPEND SOURCES ${CODESTREAM_WASM} ${CODING_WASM} ${TRANSFORM_WASM})
-    source_group("codestream" FILES ${CODESTREAM_WASM})
-    source_group("coding" FILES ${CODING_WASM})
-    source_group("transform" FILES ${TRANSFORM_WASM})
-  endif()
-else()
+# SIMD support is the generic C++ code plus, on x86-64/i386, three
+# hand-written AVX2 survivors that measured faster than their Google
+# Highway equivalents, plus the Highway kernels below.  Everything is
+# gated at run time; OJPH_DISABLE_SIMD removes all of it.
+if(NOT EMSCRIPTEN)
   if (NOT OJPH_DISABLE_SIMD)
     if (("${OJPH_TARGET_ARCH}" MATCHES "OJPH_ARCH_X86_64")
       OR ("${OJPH_TARGET_ARCH}" MATCHES "OJPH_ARCH_I386")
       OR MULTI_GEN_X86_64)
 
-      if (NOT OJPH_DISABLE_SSE)
-        list(APPEND SOURCES ${CODESTREAM_SSE} ${TRANSFORM_SSE})
-        source_group("codestream" FILES ${CODESTREAM_SSE})
-        source_group("transform" FILES ${TRANSFORM_SSE})
-      endif()
-      if (NOT OJPH_DISABLE_SSE2)
-        list(APPEND SOURCES ${CODESTREAM_SSE2} ${TRANSFORM_SSE2})
-        source_group("codestream" FILES ${CODESTREAM_SSE2})
-        source_group("transform" FILES ${TRANSFORM_SSE2})
-      endif()
-      if (NOT OJPH_DISABLE_SSSE3)
-        list(APPEND SOURCES ${CODING_SSSE3})
-        source_group("coding" FILES ${CODING_SSSE3})
-      endif()
-      if (NOT OJPH_DISABLE_AVX)
-        list(APPEND SOURCES ${CODESTREAM_AVX} ${TRANSFORM_AVX})
-        source_group("codestream" FILES ${CODESTREAM_AVX})
-        source_group("transform" FILES ${TRANSFORM_AVX})
-      endif()
-      if (NOT OJPH_DISABLE_AVX2)
-        list(APPEND SOURCES ${CODESTREAM_AVX2} ${TRANSFORM_AVX2} ${CODING_AVX2})
-        source_group("codestream" FILES ${CODESTREAM_AVX2})
-        source_group("transform" FILES ${TRANSFORM_AVX2})
-        source_group("coding" FILES ${CODING_AVX2})
-      endif()
-      if (NOT OJPH_DISABLE_AVX512)
-        list(APPEND SOURCES ${CODING_AVX512} ${TRANSFORM_AVX512})
-        source_group("coding" FILES ${CODING_AVX512})
-        source_group("transform" FILES ${TRANSFORM_AVX512})
+      # the AVX2 survivors: the block decoder, the reversible
+      # tx_from_cb32 kernel, and the reversible vertical lifting step
+      list(APPEND SOURCES ${CODESTREAM_AVX2} ${TRANSFORM_AVX2} ${CODING_AVX2})
+      source_group("codestream" FILES ${CODESTREAM_AVX2})
+      source_group("transform" FILES ${TRANSFORM_AVX2})
+      source_group("coding" FILES ${CODING_AVX2})
+
+      if (OJPH_ENABLE_HWY)
+        # Google Highway kernels: encoder (coding) and decode-side data
+        # movement (codestream), gated at run time in
+        # ojph_codeblock_fun.cpp and ojph_tile.cpp.  OJPH_ENABLE_HWY is
+        # turned off by the top-level CMakeLists when the hwy headers or
+        # library are not found.
+        list(APPEND SOURCES ${CODING_HWY} ${CODESTREAM_HWY})
+        source_group("coding" FILES ${CODING_HWY})
+        source_group("codestream" FILES ${CODESTREAM_HWY})
       endif()
 
-      # Set compilation flags
-      if (MSVC)
-        set_source_files_properties(codestream/ojph_codestream_avx.cpp PROPERTIES COMPILE_FLAGS "/arch:AVX")
+      # Set compilation flags.  OJPH_COMPILER_MSVC_TRUE is cl.exe only;
+      # clang-cl takes the GCC/Clang branch (it accepts -m machine flags).
+      if (OJPH_COMPILER_MSVC_TRUE)
         set_source_files_properties(codestream/ojph_codestream_avx2.cpp PROPERTIES COMPILE_FLAGS "/arch:AVX2")
         set_source_files_properties(coding/ojph_block_decoder_avx2.cpp PROPERTIES COMPILE_FLAGS "/arch:AVX2")
-        set_source_files_properties(coding/ojph_block_encoder_avx2.cpp PROPERTIES COMPILE_FLAGS "/arch:AVX2")
-        set_source_files_properties(coding/ojph_block_encoder_avx512.cpp PROPERTIES COMPILE_FLAGS "/arch:AVX512")
-        set_source_files_properties(transform/ojph_colour_avx.cpp PROPERTIES COMPILE_FLAGS "/arch:AVX")
-        set_source_files_properties(transform/ojph_colour_avx2.cpp PROPERTIES COMPILE_FLAGS "/arch:AVX2")
-        set_source_files_properties(transform/ojph_transform_avx.cpp PROPERTIES COMPILE_FLAGS "/arch:AVX")
+        # the encoder keeps MSVC's pre-dispatch behavior: a single
+        # statically selected AVX2 target (no target attributes on MSVC)
+        set_source_files_properties(coding/ojph_block_encoder_hwy.cpp PROPERTIES
+          COMPILE_FLAGS "/arch:AVX2"
+          COMPILE_DEFINITIONS "HWY_COMPILE_ONLY_STATIC=1")
         set_source_files_properties(transform/ojph_transform_avx2.cpp PROPERTIES COMPILE_FLAGS "/arch:AVX2")
-        set_source_files_properties(transform/ojph_transform_avx512.cpp PROPERTIES COMPILE_FLAGS "/arch:AVX512")
       else()
-        set_source_files_properties(codestream/ojph_codestream_sse.cpp PROPERTIES COMPILE_FLAGS -msse)
-        set_source_files_properties(codestream/ojph_codestream_sse2.cpp PROPERTIES COMPILE_FLAGS -msse2)
-        set_source_files_properties(codestream/ojph_codestream_avx.cpp PROPERTIES COMPILE_FLAGS -mavx)
         set_source_files_properties(codestream/ojph_codestream_avx2.cpp PROPERTIES COMPILE_FLAGS -mavx2)
-        set_source_files_properties(coding/ojph_block_decoder_ssse3.cpp PROPERTIES COMPILE_FLAGS -mssse3)
         set_source_files_properties(coding/ojph_block_decoder_avx2.cpp PROPERTIES COMPILE_FLAGS -mavx2)
-        set_source_files_properties(coding/ojph_block_encoder_avx2.cpp PROPERTIES COMPILE_FLAGS -mavx2)
-        set_source_files_properties(coding/ojph_block_encoder_avx512.cpp PROPERTIES COMPILE_FLAGS "-mavx512f -mavx512cd")
-        set_source_files_properties(transform/ojph_colour_sse.cpp PROPERTIES COMPILE_FLAGS -msse)
-        set_source_files_properties(transform/ojph_colour_sse2.cpp PROPERTIES COMPILE_FLAGS -msse2)
-        set_source_files_properties(transform/ojph_colour_avx.cpp PROPERTIES COMPILE_FLAGS -mavx)
-        set_source_files_properties(transform/ojph_colour_avx2.cpp PROPERTIES COMPILE_FLAGS -mavx2)
-        set_source_files_properties(transform/ojph_transform_sse.cpp PROPERTIES COMPILE_FLAGS -msse)
-        set_source_files_properties(transform/ojph_transform_sse2.cpp PROPERTIES COMPILE_FLAGS -msse2)
-        set_source_files_properties(transform/ojph_transform_avx.cpp PROPERTIES COMPILE_FLAGS -mavx)
         set_source_files_properties(transform/ojph_transform_avx2.cpp PROPERTIES COMPILE_FLAGS -mavx2)
-        set_source_files_properties(transform/ojph_transform_avx512.cpp PROPERTIES COMPILE_FLAGS "-mavx512f -mavx512cd")
+        # dynamic dispatch: hwy's foreach_target compiles the encoder once
+        # per x86 target (SSE4 through the AVX3 variants) with per-function
+        # target attributes, so the TU needs no -m flags and stays runnable
+        # on any x86-64.  SSE2 and SSSE3 are dropped; the run-time gate in
+        # ojph_codeblock_fun.cpp requires SSE4.1.  AVX3_ZEN4 is dropped
+        # too: no Zen 4 hardware was measured, so ship only the measured
+        # targets (Zen 4 CPUs dispatch to the AVX3_DL code instead).
+        set_source_files_properties(coding/ojph_block_encoder_hwy.cpp PROPERTIES
+          COMPILE_DEFINITIONS
+          "HWY_DISABLED_TARGETS=(HWY_SSE2|HWY_SSSE3|HWY_AVX3_ZEN4)")
       endif()
-    endif()
-
-    if (("${OJPH_TARGET_ARCH}" MATCHES "OJPH_ARCH_ARM") OR MULTI_GEN_ARM64)
-
-    endif()
-
-    if (("${OJPH_TARGET_ARCH}" MATCHES "OJPH_ARCH_PPC64")
-        AND (CMAKE_SYSTEM_PROCESSOR MATCHES "ppc64le|powerpc64le"))
-      if (NOT OJPH_DISABLE_SIMD)
-        # native 128-bit VSX kernels (see ojph_simd_vsx.h).  Supported
-        # targets are POWER9 (ISA 3.0) and newer, little-endian only.
-        # The block decoder dispatch is selective; see
-        # ojph_codeblock_fun.cpp.
-        list(APPEND SOURCES ${CODESTREAM_VSX} ${CODING_VSX} ${TRANSFORM_VSX})
-        source_group("codestream" FILES ${CODESTREAM_VSX})
-        source_group("coding" FILES ${CODING_VSX})
-        source_group("transform" FILES ${TRANSFORM_VSX})
-        set_source_files_properties(codestream/ojph_codestream_vsx.cpp PROPERTIES COMPILE_FLAGS "-mcpu=power9")
-        set_source_files_properties(coding/ojph_block_decoder_vsx.cpp PROPERTIES COMPILE_FLAGS "-mcpu=power9")
-        set_source_files_properties(transform/ojph_transform_vsx.cpp PROPERTIES COMPILE_FLAGS "-mcpu=power9")
-        set_source_files_properties(transform/ojph_colour_vsx.cpp PROPERTIES COMPILE_FLAGS "-mcpu=power9")
+      if (OJPH_ENABLE_HWY)
+        # The width-portable data-movement kernels use foreach_target.h
+        # run-time dispatch; see the transform/colour block below for the
+        # flag rationale.
+        if (OJPH_COMPILER_MSVC_TRUE)
+          set_source_files_properties(codestream/ojph_codestream_hwy.cpp PROPERTIES COMPILE_FLAGS "/arch:AVX2")
+        else()
+          set_source_files_properties(codestream/ojph_codestream_hwy.cpp
+            PROPERTIES COMPILE_FLAGS "${OJPH_FFP_CONTRACT_OFF}"
+            COMPILE_DEFINITIONS
+            "HWY_DISABLED_TARGETS=(HWY_SSE2|HWY_SSSE3|HWY_AVX3_ZEN4);HWY_BROKEN_EMU128=0")
+        endif()
       endif()
     endif()
 
   endif()
 
+endif()
+
+## Google Highway SIMD implementations of the wavelet transform
+# The Highway translation units are compiled once per Highway target
+# through foreach_target.h and dispatch at run time to the best target
+# the CPU supports, falling back to the implementations above when no
+# compiled target is available.
+set(OJPH_USE_HWY FALSE)
+if (OJPH_ENABLE_HWY AND (NOT OJPH_DISABLE_SIMD) AND (NOT EMSCRIPTEN)
+    AND OJPH_HWY_INCLUDE_DIR)
+  set(OJPH_USE_HWY TRUE)
+  list(APPEND SOURCES ${TRANSFORM_HWY})
+  source_group("transform" FILES ${TRANSFORM_HWY})
+  if (("${OJPH_TARGET_ARCH}" MATCHES "OJPH_ARCH_X86_64")
+      OR ("${OJPH_TARGET_ARCH}" MATCHES "OJPH_ARCH_I386"))
+if (OJPH_COMPILER_MSVC_TRUE)
+      # MSVC lacks per-function target attributes below AVX; hwy then
+      # compiles the baseline the flags select and better, so /arch:AVX2
+      # keeps today's AVX2 floor (plus the AVX3 targets) on Windows
+      set_source_files_properties(transform/ojph_transform_hwy.cpp
+        transform/ojph_colour_hwy.cpp
+        PROPERTIES COMPILE_FLAGS "/arch:AVX2")
+    else()
+# no target flags: foreach_target.h needs the baseline left low
+      # (per-target code is built with function target attributes), so
+      # the compiled targets span SSE4 through AVX3_SPR; SSE2/SSSE3 are
+      # disabled to bound the target count, and AVX3_ZEN4 because no
+      # Zen 4 hardware was measured (Zen 4 dispatches to AVX3_DL).  With them disabled, the
+      # baseline is hwy's portable fallback; keep that at EMU128 (GCC
+      # older than 16 would otherwise pick HWY_SCALAR, which lacks some
+      # of the ops used here) -- the fallback only has to compile, since
+      # the install gates never dispatch below SSE4.
+      # OJPH_FFP_CONTRACT_OFF (-ffp-contract=off, spelled per driver in the
+      # top-level CMakeLists) keeps the float (irv/ICT) kernels from fusing
+      # mul+add into fma, so their values match the generic implementation
+      set_source_files_properties(transform/ojph_transform_hwy.cpp
+        transform/ojph_colour_hwy.cpp
+        PROPERTIES COMPILE_FLAGS "${OJPH_FFP_CONTRACT_OFF}"
+        COMPILE_DEFINITIONS
+        "HWY_DISABLED_TARGETS=(HWY_SSE2|HWY_SSSE3|HWY_AVX3_ZEN4);HWY_BROKEN_EMU128=0")
+    endif()
+  endif()
 endif()
 
 ## Set debug postfix for different platforms
@@ -148,19 +148,32 @@ elseif (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
   endif()
 endif()
 
-add_library(openjph ${SOURCES})
+add_library(ojph ${SOURCES})
+
+if (OJPH_USE_HWY)
+  target_compile_definitions(ojph PRIVATE OJPH_ENABLE_HWY)
+  target_include_directories(ojph PRIVATE ${OJPH_HWY_INCLUDE_DIR})
+  # foreach_target.h re-includes the hwy translation units by the path
+  # set in HWY_TARGET_INCLUDE, which is relative to this directory
+  # (the transform/colour/codestream TUs and the coding/... encoder TU)
+  target_include_directories(ojph PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  # run-time dispatch (hwy::SupportedTargets and the chosen-target
+  # bookkeeping) lives in the hwy library; the top-level CMakeLists
+  # guarantees it was found
+  target_link_libraries(ojph PRIVATE ${OJPH_HWY_LIBRARY})
+endif()
 
 ## The option BUILD_SHARED_LIBS
 if (BUILD_SHARED_LIBS AND WIN32)
-  target_compile_definitions(openjph PRIVATE OJPH_BUILD_SHARED_LIBRARY)
+  target_compile_definitions(ojph PRIVATE OJPH_BUILD_SHARED_LIBRARY)
 endif()
 
+
 ## include library version/name
-set_target_properties(openjph PROPERTIES POSITION_INDEPENDENT_CODE ON)
-target_compile_definitions(openjph PUBLIC _FILE_OFFSET_BITS=64)
-target_include_directories(openjph PUBLIC
+set_target_properties(ojph PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_compile_definitions(ojph PUBLIC _FILE_OFFSET_BITS=64)
+target_include_directories(ojph PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/openjph>
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/shared>
   $<INSTALL_INTERFACE:include>
 )
 
@@ -172,34 +185,34 @@ if (NOT MSVC)
   include(CheckSymbolExists)
   check_symbol_exists(aligned_alloc "stdlib.h" OJPH_ALIGNED_ALLOC_EXISTS)
   if (OJPH_ALIGNED_ALLOC_EXISTS)
-    target_compile_definitions(openjph PRIVATE OJPH_ALIGNED_ALLOC_EXISTS)
+    target_compile_definitions(ojph PRIVATE OJPH_ALIGNED_ALLOC_EXISTS)
   else()
     check_symbol_exists(posix_memalign "stdlib.h" OJPH_POSIX_MEMALIGN_EXISTS)
     if (OJPH_POSIX_MEMALIGN_EXISTS)
-      target_compile_definitions(openjph PRIVATE OJPH_POSIX_MEMALIGN_EXISTS)
+      target_compile_definitions(ojph PRIVATE OJPH_POSIX_MEMALIGN_EXISTS)
     endif()
   endif()
 endif()
 
 if (MSVC)
-  set(OJPH_LIB_NAME_STRING "openjph.${OPENJPH_VERSION_MAJOR}.${OPENJPH_VERSION_MINOR}")
-  set_target_properties(openjph
+  set(OJPH_LIB_NAME_STRING "ojph.${OPENJPH_VERSION_MAJOR}.${OPENJPH_VERSION_MINOR}")
+  set_target_properties(ojph
     PROPERTIES
-      OUTPUT_NAME "openjph.${OPENJPH_VERSION_MAJOR}.${OPENJPH_VERSION_MINOR}")
+      OUTPUT_NAME "ojph.${OPENJPH_VERSION_MAJOR}.${OPENJPH_VERSION_MINOR}")
 else()
-  set(OJPH_LIB_NAME_STRING "openjph.${OPENJPH_VERSION_MAJOR}.${OPENJPH_VERSION_MINOR}")
-  set_target_properties(openjph
+  set(OJPH_LIB_NAME_STRING "ojph.${OPENJPH_VERSION_MAJOR}.${OPENJPH_VERSION_MINOR}")
+  set_target_properties(ojph
     PROPERTIES
       SOVERSION "${OPENJPH_VERSION_MAJOR}.${OPENJPH_VERSION_MINOR}"
       VERSION "${OPENJPH_VERSION}")
 endif()
 
-install(TARGETS openjph
-  EXPORT openjph-targets
+install(TARGETS ojph
+  EXPORT ojph-targets
 )
 
 install(DIRECTORY openjph/
-  DESTINATION include/openjph
+  DESTINATION include/ojph
   FILES_MATCHING
   PATTERN "*.h"
 )

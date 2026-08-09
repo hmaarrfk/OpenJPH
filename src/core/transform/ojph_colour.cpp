@@ -110,7 +110,6 @@ namespace ojph {
     {
       static std::once_flag colour_transform_functions_init_flag;
       std::call_once(colour_transform_functions_init_flag, []() {
-#if !defined(OJPH_ENABLE_WASM_SIMD) || !defined(OJPH_EMSCRIPTEN)
 
         rev_convert = gen_rev_convert;
         rev_convert_nlt_type3 = gen_rev_convert_nlt_type3;
@@ -125,95 +124,14 @@ namespace ojph {
 
   #ifndef OJPH_DISABLE_SIMD
 
-    #if (defined(OJPH_ARCH_X86_64) || defined(OJPH_ARCH_I386))
-
-      #ifndef OJPH_DISABLE_SSE
-        if (get_cpu_ext_level() >= X86_CPU_EXT_LEVEL_SSE)
-        {
-          ict_forward = sse_ict_forward;
-          ict_backward = sse_ict_backward;
-        }
-      #endif // !OJPH_DISABLE_SSE
-
-      #ifndef OJPH_DISABLE_SSE2
-        if (get_cpu_ext_level() >= X86_CPU_EXT_LEVEL_SSE2)
-        {
-          rev_convert = sse2_rev_convert;
-          rev_convert_nlt_type3 = sse2_rev_convert_nlt_type3;
-          irv_convert_to_integer = sse2_irv_convert_to_integer;
-          irv_convert_to_float = sse2_irv_convert_to_float;
-          irv_convert_to_integer_nlt_type3 =
-            sse2_irv_convert_to_integer_nlt_type3;
-          irv_convert_to_float_nlt_type3 =
-            sse2_irv_convert_to_float_nlt_type3;
-          rct_forward = sse2_rct_forward;
-          rct_backward = sse2_rct_backward;
-        }
-      #endif // !OJPH_DISABLE_SSE2
-
-      #ifndef OJPH_DISABLE_AVX
-        if (get_cpu_ext_level() >= X86_CPU_EXT_LEVEL_AVX)
-        {
-          ict_forward = avx_ict_forward;
-          ict_backward = avx_ict_backward;
-        }
-      #endif // !OJPH_DISABLE_AVX
-
-      #ifndef OJPH_DISABLE_AVX2
-        if (get_cpu_ext_level() >= X86_CPU_EXT_LEVEL_AVX2)
-        {
-          rev_convert = avx2_rev_convert;
-          rev_convert_nlt_type3 = avx2_rev_convert_nlt_type3;
-          irv_convert_to_integer = avx2_irv_convert_to_integer;
-          irv_convert_to_float = avx2_irv_convert_to_float;
-          irv_convert_to_integer_nlt_type3 =
-            avx2_irv_convert_to_integer_nlt_type3;
-          irv_convert_to_float_nlt_type3 =
-            avx2_irv_convert_to_float_nlt_type3;
-          rct_forward = avx2_rct_forward;
-          rct_backward = avx2_rct_backward;
-        }
-      #endif // !OJPH_DISABLE_AVX2
-
-    #elif defined(OJPH_ARCH_ARM)
-
-    #elif defined(OJPH_ARCH_PPC64LE)
-
-        if (get_cpu_ext_level() >= PPC_CPU_EXT_LEVEL_ARCH_3_00)
-        {
-          // 128-bit VSX kernels; see ojph_simd_vsx.h
-          rev_convert = vsx_rev_convert;
-          rev_convert_nlt_type3 = vsx_rev_convert_nlt_type3;
-          irv_convert_to_integer = vsx_irv_convert_to_integer;
-          irv_convert_to_float = vsx_irv_convert_to_float;
-          irv_convert_to_integer_nlt_type3 =
-            vsx_irv_convert_to_integer_nlt_type3;
-          irv_convert_to_float_nlt_type3 =
-            vsx_irv_convert_to_float_nlt_type3;
-          rct_forward = vsx_rct_forward;
-          rct_backward = vsx_rct_backward;
-          ict_forward = vsx_ict_forward;
-          ict_backward = vsx_ict_backward;
-        }
-
-    #endif // !(defined(OJPH_ARCH_X86_64) || defined(OJPH_ARCH_I386))
+    #ifdef OJPH_ENABLE_HWY
+        // Google Highway implementations; these replace the RCT/ICT
+        // functions selected above when the CPU supports the target
+        // Highway was compiled for.
+        install_colour_transforms();
+    #endif
 
   #endif // !OJPH_DISABLE_SIMD
-
-#else // OJPH_ENABLE_WASM_SIMD
-
-        rev_convert = wasm_rev_convert;
-        rev_convert_nlt_type3 = wasm_rev_convert_nlt_type3;
-        irv_convert_to_integer = wasm_irv_convert_to_integer;
-        irv_convert_to_float = wasm_irv_convert_to_float;
-        irv_convert_to_integer_nlt_type3 = wasm_irv_convert_to_integer_nlt_type3;
-        irv_convert_to_float_nlt_type3 = wasm_irv_convert_to_float_nlt_type3;
-        rct_forward = wasm_rct_forward;
-        rct_backward = wasm_rct_backward;
-        ict_forward = wasm_ict_forward;
-        ict_backward = wasm_ict_backward;
-
-#endif // !OJPH_ENABLE_WASM_SIMD
       });
     }
 
@@ -229,10 +147,6 @@ namespace ojph {
       float(2.0*double(ALPHA_RF)*(1.0-double(ALPHA_RF))/double(ALPHA_GF));
     const float CT_CNST::GAMMA_CB2B = float(2.0 * (1.0 - double(ALPHA_BF)));
     const float CT_CNST::GAMMA_CR2R = float(2.0 * (1.0 - double(ALPHA_RF)));
-
-    //////////////////////////////////////////////////////////////////////////
-
-#if !defined(OJPH_ENABLE_WASM_SIMD) || !defined(OJPH_EMSCRIPTEN)
 
     //////////////////////////////////////////////////////////////////////////
     void gen_rev_convert(
@@ -566,8 +480,6 @@ namespace ojph {
         *b++ = *y++ + CT_CNST::GAMMA_CB2B * *cb++;
       }
     }
-
-#endif // !OJPH_ENABLE_WASM_SIMD
 
   }
 }

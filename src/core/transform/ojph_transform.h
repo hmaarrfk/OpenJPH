@@ -73,6 +73,26 @@ namespace ojph {
         const line_buf* hsrc, ui32 width, bool even);
 
     /////////////////////////////////////////////////////////////////////////
+    // Reversible functions for arbitrary (ARB) kernels with a single
+    // lifting coefficient per step.
+    /////////////////////////////////////////////////////////////////////////
+
+    /////////////////////////////////////////////////////////////////////////
+    extern void (*rev_vert_step_one_tap)
+      (const lifting_step* s, const line_buf* src, const line_buf* aug,
+        ui32 repeat, bool synthesis);
+
+    /////////////////////////////////////////////////////////////////////////
+    extern void (*rev_horz_ana_arb)
+      (const param_atk* atk, const line_buf* ldst, const line_buf* hdst,
+        const line_buf* src, ui32 width, bool even);
+
+    /////////////////////////////////////////////////////////////////////////
+    extern void (*rev_horz_syn_arb)
+      (const param_atk* atk, const line_buf* dst, const line_buf* lsrc,
+        const line_buf* hsrc, ui32 width, bool even);
+
+    /////////////////////////////////////////////////////////////////////////
     // Irreversible functions
     /////////////////////////////////////////////////////////////////////////
 

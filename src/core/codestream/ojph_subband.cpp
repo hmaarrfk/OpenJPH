@@ -39,6 +39,7 @@
 
 #include <climits>
 #include <cmath>
+#include <cstring>
 
 #include "ojph_mem.h"
 #include "ojph_params.h"
@@ -104,7 +105,9 @@ namespace ojph {
       ui32 width = band_rect.siz.w + 1;
       if (reversible)
       {
-        if (precision <= 32)
+        if (can_use_16bit_lines(qp, cdp, codestream->get_siz(), comp_num))
+          allocator->pre_alloc_data<si16>(width, 1);
+        else if (precision <= 32)
           allocator->pre_alloc_data<si32>(width, 1);
         else
           allocator->pre_alloc_data<si64>(width, 1);
@@ -211,7 +214,9 @@ namespace ojph {
       ui32 width = band_rect.siz.w + 1;
       if (reversible)
       {
-        if (precision <= 32)
+        if (can_use_16bit_lines(qcd, cdp, codestream->get_siz(), comp_num))
+          lines->wrap(allocator->post_alloc_data<si16>(width, 1), width, 1);
+        else if (precision <= 32)
           lines->wrap(allocator->post_alloc_data<si32>(width, 1), width, 1);
         else
           lines->wrap(allocator->post_alloc_data<si64>(width, 1), width, 1);
@@ -372,9 +377,29 @@ namespace ojph {
 
       assert(cur_line >= 0);
 
-      //pull from codeblocks
-      for (ui32 i = 0; i < num_blocks.w; ++i)
-        blocks[i].pull_line(lines + 0);
+      //pull from codeblocks; for mask-like content most codeblocks are
+      //entirely zero, so runs of zero blocks are cleared with one memset
+      //per run instead of one pull_line call (and one small memset) per
+      //codeblock
+      for (ui32 i = 0; i < num_blocks.w; )
+      {
+        if (blocks[i].is_zero_block())
+        {
+          // bytes per line sample, matching codeblock::pull_line's
+          // zero_block path
+          size_t esz = blocks[i].is_buf64() ? sizeof(ui64)
+            : ((lines->flags & line_buf::LFT_16BIT) ? sizeof(si16)
+                                                    : sizeof(si32));
+          si64 off = blocks[i].get_line_offset();
+          size_t w = blocks[i].get_width();
+          ++i;
+          while (i < num_blocks.w && blocks[i].is_zero_block())
+            w += blocks[i++].get_width();
+          memset((ui8*)lines->p + off * (si64)esz, 0, w * esz);
+        }
+        else
+          blocks[i++].pull_line(lines + 0);
+      }
 
       return lines;
     }
