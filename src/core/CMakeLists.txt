@@ -41,11 +41,10 @@ if(NOT EMSCRIPTEN)
 
       if (OJPH_ENABLE_HWY)
         # Google Highway kernels: encoder (coding) and decode-side data
-        # movement (codestream); header-only usage with a statically
-        # selected target (AVX2), gated at run time in
+        # movement (codestream), gated at run time in
         # ojph_codeblock_fun.cpp and ojph_tile.cpp.  OJPH_ENABLE_HWY is
-        # turned off by the top-level CMakeLists when the hwy headers are
-        # not found.
+        # turned off by the top-level CMakeLists when the hwy headers or
+        # library are not found.
         list(APPEND SOURCES ${CODING_HWY} ${CODESTREAM_HWY})
         source_group("coding" FILES ${CODING_HWY})
         source_group("codestream" FILES ${CODESTREAM_HWY})
@@ -61,19 +60,25 @@ if(NOT EMSCRIPTEN)
         set_source_files_properties(codestream/ojph_codestream_avx2.cpp PROPERTIES COMPILE_FLAGS -mavx2)
         set_source_files_properties(coding/ojph_block_decoder_avx2.cpp PROPERTIES COMPILE_FLAGS -mavx2)
         set_source_files_properties(transform/ojph_transform_avx2.cpp PROPERTIES COMPILE_FLAGS -mavx2)
-        # static dispatch: the Highway TU targets the local best (AVX2);
-        # run-time gated on X86_CPU_EXT_LEVEL_AVX2 in ojph_codeblock_fun.cpp.
-        # Highway's static AVX2 target additionally needs
-        # BMI2/FMA/F16C/AES/PCLMUL (present on every AVX2-capable CPU).
+        # The HT block encoder is written against fixed 256-bit vectors,
+        # so it stays statically compiled for Highway's AVX2 target;
+        # run-time gated on X86_CPU_EXT_LEVEL_AVX2 in
+        # ojph_codeblock_fun.cpp.  Highway's static AVX2 target
+        # additionally needs BMI2/FMA/F16C/AES/PCLMUL (present on every
+        # AVX2-capable CPU).
         set_source_files_properties(coding/ojph_block_encoder_hwy.cpp PROPERTIES COMPILE_FLAGS "-mavx2 -mbmi -mbmi2 -mfma -mf16c -maes -mpclmul")
       endif()
       if (OJPH_ENABLE_HWY)
-        # hwy's AVX2 baseline needs SSE4/AES/PCLMUL/BMI2/FMA/F16C as well;
-        # every CPU that reports AVX2 also has these
+        # The width-portable data-movement kernels use foreach_target.h
+        # run-time dispatch; see the transform/colour block below for the
+        # flag rationale.
         if (MSVC)
           set_source_files_properties(codestream/ojph_codestream_hwy.cpp PROPERTIES COMPILE_FLAGS "/arch:AVX2")
         else()
-          set_source_files_properties(codestream/ojph_codestream_hwy.cpp PROPERTIES COMPILE_FLAGS "-mavx2 -maes -mpclmul -mbmi -mbmi2 -mfma -mf16c")
+          set_source_files_properties(codestream/ojph_codestream_hwy.cpp
+            PROPERTIES COMPILE_FLAGS "-ffp-contract=off"
+            COMPILE_DEFINITIONS
+            "HWY_DISABLED_TARGETS=(HWY_SSE2|HWY_SSSE3);HWY_BROKEN_EMU128=0")
         endif()
       endif()
     endif()
@@ -83,33 +88,41 @@ if(NOT EMSCRIPTEN)
 endif()
 
 ## Google Highway SIMD implementations of the wavelet transform
-# The Highway translation unit is compiled for a single (static) Highway
-# target, selected by the compiler flags set here; the code installs the
-# functions only when the CPU supports that target, and falls back to the
-# implementations above otherwise.
+# The Highway translation units are compiled once per Highway target
+# through foreach_target.h and dispatch at run time to the best target
+# the CPU supports, falling back to the implementations above when no
+# compiled target is available.
 set(OJPH_USE_HWY FALSE)
 if (OJPH_ENABLE_HWY AND (NOT OJPH_DISABLE_SIMD) AND (NOT EMSCRIPTEN)
     AND OJPH_HWY_INCLUDE_DIR)
   set(OJPH_USE_HWY TRUE)
-  find_library(OJPH_HWY_LIBRARY hwy
-    HINTS ENV CONDA_PREFIX ENV HWY_ROOT
-    PATH_SUFFIXES lib)
   list(APPEND SOURCES ${TRANSFORM_HWY})
   source_group("transform" FILES ${TRANSFORM_HWY})
   if (("${OJPH_TARGET_ARCH}" MATCHES "OJPH_ARCH_X86_64")
       OR ("${OJPH_TARGET_ARCH}" MATCHES "OJPH_ARCH_I386"))
-    # the flags Highway needs for its AVX2 target
     if (MSVC)
+      # MSVC lacks per-function target attributes below AVX; hwy then
+      # compiles the baseline the flags select and better, so /arch:AVX2
+      # keeps today's AVX2 floor (plus the AVX3 targets) on Windows
       set_source_files_properties(transform/ojph_transform_hwy.cpp
         transform/ojph_colour_hwy.cpp
         PROPERTIES COMPILE_FLAGS "/arch:AVX2")
     else()
+      # no target flags: foreach_target.h needs the baseline left low
+      # (per-target code is built with function target attributes), so
+      # the compiled targets span SSE4 through AVX3_SPR; SSE2/SSSE3 are
+      # disabled to bound the target count.  With them disabled, the
+      # baseline is hwy's portable fallback; keep that at EMU128 (GCC
+      # older than 16 would otherwise pick HWY_SCALAR, which lacks some
+      # of the ops used here) -- the fallback only has to compile, since
+      # the install gates never dispatch below SSE4.
       # -ffp-contract=off keeps the float (irv/ICT) kernels from fusing
       # mul+add into fma, so their values match the generic implementation
       set_source_files_properties(transform/ojph_transform_hwy.cpp
         transform/ojph_colour_hwy.cpp
-        PROPERTIES COMPILE_FLAGS
-        "-mavx2 -maes -mpclmul -mbmi -mbmi2 -mfma -mf16c -ffp-contract=off")
+        PROPERTIES COMPILE_FLAGS "-ffp-contract=off"
+        COMPILE_DEFINITIONS
+        "HWY_DISABLED_TARGETS=(HWY_SSE2|HWY_SSSE3);HWY_BROKEN_EMU128=0")
     endif()
   endif()
 endif()
@@ -133,9 +146,10 @@ if (OJPH_USE_HWY)
   # foreach_target.h re-includes the hwy translation units by the path
   # set in HWY_TARGET_INCLUDE, which is relative to this directory
   target_include_directories(ojph PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-  if (OJPH_HWY_LIBRARY)
-    target_link_libraries(ojph PRIVATE ${OJPH_HWY_LIBRARY})
-  endif()
+  # run-time dispatch (hwy::SupportedTargets and the chosen-target
+  # bookkeeping) lives in the hwy library; the top-level CMakeLists
+  # guarantees it was found
+  target_link_libraries(ojph PRIVATE ${OJPH_HWY_LIBRARY})
 endif()
 
 ## The option BUILD_SHARED_LIBS
