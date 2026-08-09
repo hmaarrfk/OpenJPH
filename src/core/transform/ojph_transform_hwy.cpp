@@ -1207,17 +1207,6 @@ namespace ojph {
       if (is_null_step(s))
         return; // the step changes nothing; rev13 update steps are such
 
-      // At AVX2 the hand-written SIMD vertical steps (SSE2/AVX2) measured
-      // slightly faster than the Highway loop of the same width, so the
-      // Highway loop runs only when the generic implementation would run
-      // otherwise; at AVX-512 class targets the Highway loop is well
-      // ahead (see install_rev_transforms) and is preferred.
-      if (!hwy_vert_step_wins && fb_rev_vert_step != gen_rev_vert_step)
-      {
-        fb_rev_vert_step(s, sig, other, aug, repeat, synthesis);
-        return;
-      }
-
       if (((sig != NULL) && (sig->flags & line_buf::LFT_32BIT)) ||
           ((aug != NULL) && (aug->flags & line_buf::LFT_32BIT)) ||
           ((other != NULL) && (other->flags & line_buf::LFT_32BIT)))
@@ -1446,7 +1435,14 @@ namespace ojph {
       fb_rev_horz_ana_arb      = rev_horz_ana_arb;
       fb_rev_horz_syn_arb      = rev_horz_syn_arb;
 
-      rev_vert_step            = simd_rev_vert_step;
+      // Measurements show the hand-written SIMD vertical step (AVX2)
+      // is slightly faster than the Highway loop of the same width, and
+      // it performs the null-step skip itself; take over the vertical
+      // step only when the Highway loop wins (AVX-512 class targets) or
+      // when the generic implementation would run otherwise (forwarding
+      // to the survivor from here costs a measurable extra dispatch).
+      if (hwy_vert_step_wins || fb_rev_vert_step == gen_rev_vert_step)
+        rev_vert_step          = simd_rev_vert_step;
       rev_horz_ana             = simd_rev_horz_ana;
       rev_horz_syn             = simd_rev_horz_syn;
       rev_vert_step_one_tap    = simd_rev_vert_step_one_tap;

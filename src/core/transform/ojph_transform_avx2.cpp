@@ -313,6 +313,12 @@ namespace ojph {
                             const line_buf* other, const line_buf* aug,
                             ui32 repeat, bool synthesis)
     {
+      // the step adds (Batk + Aatk * x) >> Eatk, which is identically zero
+      // when Aatk == 0 and Batk >> Eatk == 0 (the rev13 update step is
+      // such); skip the pass
+      if (s->rev.Aatk == 0 && (s->rev.Batk >> s->rev.Eatk) == 0)
+        return;
+
       if (((sig != NULL) && (sig->flags & line_buf::LFT_32BIT)) ||
           ((aug != NULL) && (aug->flags & line_buf::LFT_32BIT)) ||
           ((other != NULL) && (other->flags & line_buf::LFT_32BIT)))
