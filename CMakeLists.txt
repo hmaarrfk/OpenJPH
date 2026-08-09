@@ -47,6 +47,8 @@ option(OJPH_DISABLE_SIMD "Disables the use of SIMD instructions -- agnostic to a
 
 option(OJPH_ENABLE_HWY "Enables Google Highway (hwy) SIMD kernels; auto-disabled when the hwy headers are not found" ON)
 
+option(OJPH_REQUIRE_HWY "Fail the configure step when the Google Highway headers cannot be found, instead of silently building without them" OFF)
+
 ## options that are being deprecated
 if (DEFINED OJPH_DISABLE_INTEL_SIMD)
   message(STATUS "OJPH_DISABLE_INTEL_SIMD is being deprecated. Instead, use \"OJPH_DISABLE_SIMD\", "
@@ -64,10 +66,17 @@ if (OJPH_ENABLE_HWY)
   if (OJPH_HWY_INCLUDE_DIR)
     message(STATUS "Google Highway headers found: ${OJPH_HWY_INCLUDE_DIR}")
   else()
+    if (OJPH_REQUIRE_HWY)
+      message(FATAL_ERROR "Google Highway headers not found and "
+                          "OJPH_REQUIRE_HWY is ON; install libhwy or point "
+                          "OJPH_HWY_INCLUDE_DIR at the Highway headers")
+    endif()
     message(STATUS "Google Highway headers not found; "
                    "disabling OJPH_ENABLE_HWY")
     set(OJPH_ENABLE_HWY OFF)
   endif()
+elseif (OJPH_REQUIRE_HWY)
+  message(FATAL_ERROR "OJPH_REQUIRE_HWY is ON but OJPH_ENABLE_HWY is OFF")
 endif()
 
 ## Setting some of the options if EMSCRIPTEN is the compiler
