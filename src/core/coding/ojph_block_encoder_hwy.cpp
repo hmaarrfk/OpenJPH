@@ -34,12 +34,14 @@
 // This file is part of the OpenJPH software implementation.
 // File: ojph_block_encoder_hwy.cpp
 //
-// A port of the AVX2 HT cleanup-pass block encoder to Google Highway
-// (statically dispatched to the best target enabled by the compile
-// flags; 8 x 32-bit lanes are assumed, i.e. a 256-bit target).  The
-// serial MEL/VLC/MagSgn bit-packing is identical to the AVX2 file; the
-// vector part (per-quad significance/exponent/magnitude computation)
-// uses portable Highway ops instead of raw intrinsics.
+// A port of the AVX2 HT cleanup-pass block encoder to Google Highway,
+// compiled once per x86 target through hwy's foreach_target mechanism
+// and selected at run time (dynamic dispatch).  The vector part
+// (per-quad significance/exponent/magnitude computation) is written for
+// a width-agnostic lane count: 8 x 32-bit lanes on 256-bit and wider
+// targets, degrading to 4 lanes on 128-bit targets (SSE4).  The serial
+// MEL/VLC/MagSgn bit-packing is identical to the AVX2 file, so the
+// produced codestream is byte-identical for every target.
 //***************************************************************************/
 
 #include "ojph_arch.h"
@@ -52,251 +54,67 @@
 #include <climits>
 #include <mutex>
 
-#include "hwy/highway.h"
-
 #include "ojph_mem.h"
 #include "ojph_block_encoder.h"
 #include "ojph_message.h"
 
-#ifdef OJPH_COMPILER_MSVC
-  #define likely(x)       (x)
-  #define unlikely(x)     (x)
-#else
-  #define likely(x)       __builtin_expect((x), 1)
-  #define unlikely(x)     __builtin_expect((x), 0)
-#endif
+#undef HWY_TARGET_INCLUDE
+#define HWY_TARGET_INCLUDE "coding/ojph_block_encoder_hwy.cpp"
+#include <hwy/foreach_target.h>
+#include <hwy/highway.h>
 
-namespace hn = hwy::HWY_NAMESPACE;
-
+//***************************************************************************/
+// declarations shared by all compiled targets; the tables are pure data,
+// so a single copy serves every target (definitions are at the bottom of
+// this file, in the once-per-TU section)
+#ifndef OJPH_BLOCK_ENCODER_HWY_SHARED
+#define OJPH_BLOCK_ENCODER_HWY_SHARED
 namespace ojph {
   namespace local {
-
-    /////////////////////////////////////////////////////////////////////////
-    // tables
-    /////////////////////////////////////////////////////////////////////////
 
     //VLC encoding
     // index is (c_q << 8) + (rho << 4) + eps
     // data is  (cwd << 8) + (cwd_len << 4) + eps
     // table 0 is for the initial line of quads
-    static ui32 vlc_tbl0[2048];
-    static ui32 vlc_tbl1[2048];
+    extern ui32 enc_hwy_vlc_tbl0[2048];
+    extern ui32 enc_hwy_vlc_tbl1[2048];
 
-    //UVLC encoding
-    static ui32 uvlc_tbl_pair1[33 * 33];
-    static ui32 uvlc_tbl_pair2[33 * 33];
-    static ui32 ulvc_cwd_pre[33];
-    static int ulvc_cwd_pre_len[33];
-    static ui32 ulvc_cwd_suf[33];
-    static int ulvc_cwd_suf_len[33];
+    //UVLC encoding, pair tables (see uvlc_init_pair_tables)
+    extern ui32 enc_hwy_uvlc_tbl_pair1[33 * 33];
+    extern ui32 enc_hwy_uvlc_tbl_pair2[33 * 33];
 
-    /////////////////////////////////////////////////////////////////////////
-    static bool vlc_init_tables()
+  } /* namespace local */
+} /* namespace ojph */
+#endif // OJPH_BLOCK_ENCODER_HWY_SHARED
+
+//***************************************************************************/
+// per-target section; compiled once for every enabled target, with the
+// target's codegen attributes applied to everything in the region (the
+// serial coders included, so they keep BMI2 & co. on the AVX2+ targets)
+HWY_BEFORE_NAMESPACE();
+namespace ojph {
+  namespace local {
+    namespace HWY_NAMESPACE {
+
+    namespace hn = hwy::HWY_NAMESPACE;
+
+#if HWY_TARGET == HWY_SCALAR
+    // The single-lane SCALAR target (hwy's fallback when it considers the
+    // vector-emulation fallback broken for the compiler at hand) cannot
+    // express the multi-lane kernels below.  It can only be reached on
+    // x86 CPUs without SSE4.1, which the run-time gate in
+    // ojph_codeblock_fun.cpp keeps on the generic encoder anyway, so
+    // simply forward to the generic encoder.
+    void hwy_encode_codeblock(ui32* buf, ui32 missing_msbs,
+                              ui32 num_passes, ui32 _width, ui32 height,
+                              ui32 stride, ui32* lengths,
+                              ojph::mem_elastic_allocator *elastic,
+                              ojph::coded_lists *& coded)
     {
-      struct vlc_src_table { int c_q, rho, u_off, e_k, e_1, cwd, cwd_len; };
-      vlc_src_table tbl0[] = {
-    #include "table0.h"
-      };
-      size_t tbl0_size = sizeof(tbl0) / sizeof(vlc_src_table);
-
-      si32 pattern_popcnt[16];
-      for (ui32 i = 0; i < 16; ++i)
-        pattern_popcnt[i] = (si32)population_count(i);
-
-      vlc_src_table* src_tbl = tbl0;
-      ui32 *tgt_tbl = vlc_tbl0;
-      size_t tbl_size = tbl0_size;
-      for (int i = 0; i < 2048; ++i)
-      {
-        int c_q = i >> 8, rho = (i >> 4) & 0xF, emb = i & 0xF;
-        if (((emb & rho) != emb) || (rho == 0 && c_q == 0))
-          tgt_tbl[i] = 0;
-        else
-        {
-          vlc_src_table *best_entry = NULL;
-          if (emb) // u_off = 1
-          {
-            int best_e_k = -1;
-            for (size_t j = 0; j < tbl_size; ++j)
-            {
-              if (src_tbl[j].c_q == c_q && src_tbl[j].rho == rho)
-                if (src_tbl[j].u_off == 1)
-                  if ((emb & src_tbl[j].e_k) == src_tbl[j].e_1)
-                  {
-                    //now we need to find the smallest cwd with the highest
-                    // number of bits set in e_k
-                    int ones_count = pattern_popcnt[src_tbl[j].e_k];
-                    if (ones_count >= best_e_k)
-                    {
-                      best_entry = src_tbl + j;
-                      best_e_k = ones_count;
-                    }
-                  }
-            }
-          }
-          else // u_off = 0
-          {
-            for (size_t j = 0; j < tbl_size; ++j)
-            {
-              if (src_tbl[j].c_q == c_q && src_tbl[j].rho == rho)
-                if (src_tbl[j].u_off == 0)
-                {
-                  best_entry = src_tbl + j;
-                  break;
-                }
-            }
-          }
-          assert(best_entry);
-          tgt_tbl[i] = (ui16)((best_entry->cwd<<8) + (best_entry->cwd_len<<4)
-                             + best_entry->e_k);
-        }
-      }
-
-      vlc_src_table tbl1[] = {
-    #include "table1.h"
-      };
-      size_t tbl1_size = sizeof(tbl1) / sizeof(vlc_src_table);
-
-      src_tbl = tbl1;
-      tgt_tbl = vlc_tbl1;
-      tbl_size = tbl1_size;
-      for (int i = 0; i < 2048; ++i)
-      {
-        int c_q = i >> 8, rho = (i >> 4) & 0xF, emb = i & 0xF;
-        if (((emb & rho) != emb) || (rho == 0 && c_q == 0))
-          tgt_tbl[i] = 0;
-        else
-        {
-          vlc_src_table *best_entry = NULL;
-          if (emb) // u_off = 1
-          {
-            int best_e_k = -1;
-            for (size_t j = 0; j < tbl_size; ++j)
-            {
-              if (src_tbl[j].c_q == c_q && src_tbl[j].rho == rho)
-                if (src_tbl[j].u_off == 1)
-                  if ((emb & src_tbl[j].e_k) == src_tbl[j].e_1)
-                  {
-                    //now we need to find the smallest cwd with the highest
-                    // number of bits set in e_k
-                    int ones_count = pattern_popcnt[src_tbl[j].e_k];
-                    if (ones_count >= best_e_k)
-                    {
-                      best_entry = src_tbl + j;
-                      best_e_k = ones_count;
-                    }
-                  }
-            }
-          }
-          else // u_off = 0
-          {
-            for (size_t j = 0; j < tbl_size; ++j)
-            {
-              if (src_tbl[j].c_q == c_q && src_tbl[j].rho == rho)
-                if (src_tbl[j].u_off == 0)
-                {
-                  best_entry = src_tbl + j;
-                  break;
-                }
-            }
-          }
-          assert(best_entry);
-          tgt_tbl[i] = (ui16)((best_entry->cwd<<8) + (best_entry->cwd_len<<4)
-                             + best_entry->e_k);
-        }
-      }
-
-
-      return true;
+      ojph_encode_codeblock32(buf, missing_msbs, num_passes, _width,
+                              height, stride, lengths, elastic, coded);
     }
-
-    /////////////////////////////////////////////////////////////////////////
-    static bool uvlc_init_tables()
-    {
-      //code goes from 0 to 31, extension and 32 are not supported here
-      ulvc_cwd_pre[0] = 0; ulvc_cwd_pre[1] = 1; ulvc_cwd_pre[2] = 2;
-      ulvc_cwd_pre[3] = 4; ulvc_cwd_pre[4] = 4;
-      ulvc_cwd_pre_len[0] = 0; ulvc_cwd_pre_len[1] = 1;
-      ulvc_cwd_pre_len[2] = 2;
-      ulvc_cwd_pre_len[3] = 3; ulvc_cwd_pre_len[4] = 3;
-      ulvc_cwd_suf[0] = 0; ulvc_cwd_suf[1] = 0; ulvc_cwd_suf[2] = 0;
-      ulvc_cwd_suf[3] = 0; ulvc_cwd_suf[4] = 1;
-      ulvc_cwd_suf_len[0] = 0; ulvc_cwd_suf_len[1] = 0;
-      ulvc_cwd_suf_len[2] = 0;
-      ulvc_cwd_suf_len[3] = 1; ulvc_cwd_suf_len[4] = 1;
-      for (int i = 5; i < 33; ++i)
-      {
-        ulvc_cwd_pre[i] = 0;
-        ulvc_cwd_pre_len[i] = 3;
-        ulvc_cwd_suf[i] = (ui32)(i-5);
-        ulvc_cwd_suf_len[i] = 5;
-      }
-      return true;
-    }
-
-    /////////////////////////////////////////////////////////////////////////
-    static void uvlc_init_pair_tables()
-    {
-      for (int uq0 = 0; uq0 < 33; ++uq0) {
-        for (int uq1 = 0; uq1 < 33; ++uq1) {
-          ui32 cwd; int len;
-
-          cwd = 0; len = 0;
-          if (uq0 > 2 && uq1 > 2) {
-            cwd |= ulvc_cwd_pre[uq0 - 2];
-            len += ulvc_cwd_pre_len[uq0 - 2];
-            cwd |= ulvc_cwd_pre[uq1 - 2] << len;
-            len += ulvc_cwd_pre_len[uq1 - 2];
-            cwd |= ulvc_cwd_suf[uq0 - 2] << len;
-            len += ulvc_cwd_suf_len[uq0 - 2];
-            cwd |= ulvc_cwd_suf[uq1 - 2] << len;
-            len += ulvc_cwd_suf_len[uq1 - 2];
-          } else if (uq0 > 2 && uq1 > 0) {
-            cwd |= ulvc_cwd_pre[uq0];
-            len += ulvc_cwd_pre_len[uq0];
-            cwd |= (ui32)(uq1 - 1) << len;
-            len += 1;
-            cwd |= ulvc_cwd_suf[uq0] << len;
-            len += ulvc_cwd_suf_len[uq0];
-          } else {
-            cwd |= ulvc_cwd_pre[uq0];
-            len += ulvc_cwd_pre_len[uq0];
-            cwd |= ulvc_cwd_pre[uq1] << len;
-            len += ulvc_cwd_pre_len[uq1];
-            cwd |= ulvc_cwd_suf[uq0] << len;
-            len += ulvc_cwd_suf_len[uq0];
-            cwd |= ulvc_cwd_suf[uq1] << len;
-            len += ulvc_cwd_suf_len[uq1];
-          }
-          uvlc_tbl_pair1[uq0 * 33 + uq1] = (cwd << 5) | (ui32)len;
-
-          cwd = 0; len = 0;
-          cwd |= ulvc_cwd_pre[uq0];
-          len += ulvc_cwd_pre_len[uq0];
-          cwd |= ulvc_cwd_pre[uq1] << len;
-          len += ulvc_cwd_pre_len[uq1];
-          cwd |= ulvc_cwd_suf[uq0] << len;
-          len += ulvc_cwd_suf_len[uq0];
-          cwd |= ulvc_cwd_suf[uq1] << len;
-          len += ulvc_cwd_suf_len[uq1];
-          uvlc_tbl_pair2[uq0 * 33 + uq1] = (cwd << 5) | (ui32)len;
-        }
-      }
-    }
-
-    /////////////////////////////////////////////////////////////////////////
-    bool initialize_block_encoder_tables_simd() {
-      static bool tables_initialized = false;
-      static std::once_flag tables_initialized_flag;
-      std::call_once(tables_initialized_flag, []() {
-        memset(vlc_tbl0, 0, 2048 * sizeof(ui32));
-        memset(vlc_tbl1, 0, 2048 * sizeof(ui32));
-        tables_initialized = vlc_init_tables();
-        tables_initialized = tables_initialized && uvlc_init_tables();
-        uvlc_init_pair_tables();
-      });
-      return tables_initialized;
-    }
+#else
 
     /////////////////////////////////////////////////////////////////////////
     //
@@ -444,12 +262,12 @@ namespace ojph {
     {
       while (true) {
         int avail = 64 - vlcp->used_bits;
-        if (likely(avail > 0 && cwd_len <= avail)) {
+        if (HWY_LIKELY(avail > 0 && cwd_len <= avail)) {
           vlcp->tmp |= cwd << vlcp->used_bits;
           vlcp->used_bits += cwd_len;
           return;
         }
-        if (likely(avail > 0)) // available space smaller than needed
+        if (HWY_LIKELY(avail > 0)) // available space smaller than needed
           vlcp->tmp |= cwd << vlcp->used_bits;
         vlcp->used_bits = 64;
         vlc_drain(vlcp);
@@ -553,7 +371,7 @@ namespace ojph {
                        & 0x8080808080808080ULL;
         ff_detect &= valid_mask;
 
-        if (likely(ff_detect == 0)) {
+        if (HWY_LIKELY(ff_detect == 0)) {
           memcpy(msp->buf + msp->pos, &word, (size_t)n_bytes);
           msp->pos += (ui32)n_bytes;
           if (n_bytes < 8)
@@ -592,12 +410,12 @@ namespace ojph {
     {
       while (true) {
         int avail = 64 - msp->used_bits;
-        if (likely(avail > 0 && cwd_len <= avail)) {
+        if (HWY_LIKELY(avail > 0 && cwd_len <= avail)) {
           msp->tmp |= cwd << msp->used_bits;
           msp->used_bits += cwd_len;
           return;
         }
-        if (likely(avail > 0)) // available space smaller than needed
+        if (HWY_LIKELY(avail > 0)) // available space smaller than needed
           msp->tmp |= cwd << msp->used_bits;
         msp->used_bits = 64;
         ms_drain(msp);
@@ -629,15 +447,24 @@ namespace ojph {
     }
 
     //////////////////////////////////////////////////////////////////////////
-    // vector helpers; 8 x 32-bit lanes (256-bit target assumed)
+    // vector helpers; the lane count VL is 8 x 32-bit lanes on 256-bit and
+    // wider targets, and 4 on 128-bit targets.  Each x-iteration of the
+    // encoder processes 2 * VL samples in each of 2 lines, i.e. VL quads.
     //////////////////////////////////////////////////////////////////////////
 
-    using tag_u32 = hn::FixedTag<uint32_t, 8>;
-    using tag_i32 = hn::FixedTag<int32_t, 8>;
+    using tag_u32 = hn::CappedTag<uint32_t, 8>;
+    using tag_i32 = hn::RebindToSigned<tag_u32>;
     using vec_u32 = hn::Vec<tag_u32>;
 
     static constexpr tag_u32 du;
     static constexpr tag_i32 di;
+
+    // lanes per vector = quads per x-iteration (a compile-time constant;
+    // on x86 the capped tag always has exactly this many lanes)
+    static constexpr ui32 VL = (ui32)hn::MaxLanes(tag_u32());
+
+    // the widest codeblock is 1024 samples, i.e. this many x-iterations
+    static constexpr ui32 max_n_loop = 1024 / (2 * VL);
 
     static inline vec_u32 v_zero() { return hn::Zero(du); }
     static inline vec_u32 v_one() { return hn::Set(du, 1); }
@@ -673,19 +500,19 @@ namespace ojph {
                                      hn::BitCast(di, b)));
     }
 
-    // lane i of the result is lane idx[i] of v
-    static inline vec_u32 v_permute(vec_u32 v, const int32_t (&idx)[8])
+    // rotate all lanes down by one, injecting a scalar into the top lane
+    // (lane i receives lane i + 1, lane VL - 1 receives the scalar)
+    static inline vec_u32 v_shift_down(vec_u32 v, ui32 top)
     {
-      return hn::TableLookupLanes(v, hn::SetTableIndices(du, idx));
+      return hn::InsertLane(hn::Slide1Down(du, v), VL - 1, top);
     }
 
-    // rotate all lanes down by one; lane 0 receives lane 1, ...,
-    // lane 7 receives lane 0 (same as the AVX2 right_shift permute)
-    static const int32_t right_shift_idx[8] = {1, 2, 3, 4, 5, 6, 7, 0};
-
-    // rotate all lanes up by one; lane 0 receives lane 7, lane 1
-    // receives lane 0, ... (same as the AVX2 left_shift permute)
-    static const int32_t left_shift_idx[8] = {7, 0, 1, 2, 3, 4, 5, 6};
+    // rotate all lanes up by one, injecting a scalar into the bottom lane
+    // (lane i receives lane i - 1, lane 0 receives the scalar)
+    static inline vec_u32 v_shift_up(vec_u32 v, ui32 bottom)
+    {
+      return hn::InsertLane(hn::Slide1Up(du, v), 0, bottom);
+    }
 
     static void proc_pixel(vec_u32 *src_vec, ui32 p,
                            vec_u32 *eq_vec, vec_u32 *s_vec,
@@ -733,35 +560,27 @@ namespace ojph {
         /* } */
       }
 
-      static const int32_t deint_idx[8] = {0, 2, 4, 6, 1, 3, 5, 7};
-
-      /* Reorder from
-       * *_vec[0]:[0, 0], [0, 1], [0, 2], ..., [0, 7]
-       * *_vec[1]:[1, 0], [1, 1], [1, 2], ..., [1, 7]
-       * *_vec[2]:[0, 8], [0, 9], [0,10], ..., [0,15]
-       * *_vec[3]:[1, 8], [1, 9], [1,10], ..., [1,15]
+      /* Deinterleave the even and odd columns; reorder from
+       * *_vec[0]:[0, 0], [0, 1], ..., [0, VL-1]      (line 0, left half)
+       * *_vec[1]:[1, 0], [1, 1], ..., [1, VL-1]      (line 1, left half)
+       * *_vec[2]:[0, VL], ..., [0, 2*VL-1]           (line 0, right half)
+       * *_vec[3]:[1, VL], ..., [1, 2*VL-1]           (line 1, right half)
        * to
-       * *_vec[0]:[0, 0], [0, 2], [0, 4], ..., [0,14]
-       * *_vec[1]:[1, 0], [1, 2], [1, 4], ..., [1,14]
-       * *_vec[2]:[0, 1], [0, 3], [0, 5], ..., [0,15]
-       * *_vec[3]:[1, 1], [1, 3], [1, 5], ..., [1,15]
+       * *_vec[0]:[0, 0], [0, 2], ..., [0, 2*VL-2]    (line 0, even cols)
+       * *_vec[1]:[1, 0], [1, 2], ..., [1, 2*VL-2]    (line 1, even cols)
+       * *_vec[2]:[0, 1], [0, 3], ..., [0, 2*VL-1]    (line 0, odd cols)
+       * *_vec[3]:[1, 1], [1, 3], ..., [1, 2*VL-1]    (line 1, odd cols)
+       * so that eq_vec[j]/s_vec[j] hold sample j of the VL quads
        */
-      vec_u32 tmp1, tmp2;
       for (ui32 i = 0; i < 2; ++i) {
-        tmp1 = v_permute(_eq_vec[0 + i], deint_idx);
-        tmp2 = v_permute(_eq_vec[2 + i], deint_idx);
-        eq_vec[0 + i] = hn::ConcatLowerLower(du, tmp2, tmp1);
-        eq_vec[2 + i] = hn::ConcatUpperUpper(du, tmp2, tmp1);
+        eq_vec[0 + i] = hn::ConcatEven(du, _eq_vec[2 + i], _eq_vec[0 + i]);
+        eq_vec[2 + i] = hn::ConcatOdd(du, _eq_vec[2 + i], _eq_vec[0 + i]);
 
-        tmp1 = v_permute(_s_vec[0 + i], deint_idx);
-        tmp2 = v_permute(_s_vec[2 + i], deint_idx);
-        s_vec[0 + i] = hn::ConcatLowerLower(du, tmp2, tmp1);
-        s_vec[2 + i] = hn::ConcatUpperUpper(du, tmp2, tmp1);
+        s_vec[0 + i] = hn::ConcatEven(du, _s_vec[2 + i], _s_vec[0 + i]);
+        s_vec[2 + i] = hn::ConcatOdd(du, _s_vec[2 + i], _s_vec[0 + i]);
 
-        tmp1 = v_permute(val_vec[0 + i], deint_idx);
-        tmp2 = v_permute(val_vec[2 + i], deint_idx);
-        _rho_vec[0 + i] = hn::ConcatLowerLower(du, tmp2, tmp1);
-        _rho_vec[2 + i] = hn::ConcatUpperUpper(du, tmp2, tmp1);
+        _rho_vec[0 + i] = hn::ConcatEven(du, val_vec[2 + i], val_vec[0 + i]);
+        _rho_vec[2 + i] = hn::ConcatOdd(du, val_vec[2 + i], val_vec[0 + i]);
       }
 
       e_qmax_vec = v_max(eq_vec[0], eq_vec[1]);
@@ -773,36 +592,6 @@ namespace ojph {
       rho_vec = hn::Or(_rho_vec[0], _rho_vec[1]);
       rho_vec = hn::Or(rho_vec, _rho_vec[2]);
       rho_vec = hn::Or(rho_vec, _rho_vec[3]);
-    }
-
-    /* 4x8 32-bit matrix transpose (blockwise interleaves + half swaps),
-     * identical lane movement to the AVX2 rotate_matrix */
-    static void rotate_matrix(vec_u32 *matrix)
-    {
-      using tag_u64 = hn::FixedTag<uint64_t, 4>;
-      constexpr tag_u64 d64;
-
-      vec_u32 tmp1 = hn::InterleaveLower(du, matrix[0], matrix[1]);
-      vec_u32 tmp2 = hn::InterleaveLower(du, matrix[2], matrix[3]);
-      vec_u32 tmp3 = hn::InterleaveUpper(du, matrix[0], matrix[1]);
-      vec_u32 tmp4 = hn::InterleaveUpper(du, matrix[2], matrix[3]);
-
-      matrix[0] = hn::BitCast(du, hn::InterleaveLower(d64,
-        hn::BitCast(d64, tmp1), hn::BitCast(d64, tmp2)));
-      matrix[1] = hn::BitCast(du, hn::InterleaveLower(d64,
-        hn::BitCast(d64, tmp3), hn::BitCast(d64, tmp4)));
-      matrix[2] = hn::BitCast(du, hn::InterleaveUpper(d64,
-        hn::BitCast(d64, tmp1), hn::BitCast(d64, tmp2)));
-      matrix[3] = hn::BitCast(du, hn::InterleaveUpper(d64,
-        hn::BitCast(d64, tmp3), hn::BitCast(d64, tmp4)));
-
-      tmp1 = hn::ConcatLowerLower(du, matrix[2], matrix[0]);
-      matrix[2] = hn::ConcatUpperUpper(du, matrix[2], matrix[0]);
-      matrix[0] = tmp1;
-
-      tmp1 = hn::ConcatLowerLower(du, matrix[3], matrix[1]);
-      matrix[3] = hn::ConcatUpperUpper(du, matrix[3], matrix[1]);
-      matrix[1] = tmp1;
     }
 
     static void proc_ms_encode(ms_struct *msp,
@@ -845,46 +634,43 @@ namespace ojph {
       mask = v_cmpneq(tmp1, v_zero());
       m_vec[3] = hn::And(mask, tmp);
 
-      rotate_matrix(m_vec);
-      rotate_matrix(s_vec);
-
-      ui32 cwd[8];
-      ui32 cwd_len[8];
-
-      /* Each iteration process 8 bytes * 2 lines */
+      /* cwd = s[i] & ((1U << m) - 1); cwd_len = m; computed on the
+       * per-sample rows; the transpose to per-quad emission order
+       * happens through the scalar indexing below, [sample][quad]
+       */
+      ui32 cwd[4][VL];
+      ui32 cwd_len[4][VL];
       for (ui32 i = 0; i < 4; ++i) {
-        /* cwd = s[i * 4 + 0] & ((1U << m) - 1)
-         * cwd_len = m
-         */
-        hn::StoreU(m_vec[i], du, cwd_len);
+        hn::StoreU(m_vec[i], du, cwd_len[i]);
         tmp = hn::Shl(v_one(), m_vec[i]);
         tmp = hn::Sub(tmp, v_one());
         tmp = hn::And(tmp, s_vec[i]);
-        hn::StoreU(tmp, du, cwd);
+        hn::StoreU(tmp, du, cwd[i]);
+      }
 
-        for (ui32 j = 0; j < 4; j += 2) {
-          ui32 idx0 = j * 2;
-          ui64 _cwd     = cwd[idx0];
-          int  _cwd_len = (int)cwd_len[idx0];
-          _cwd     |= ((ui64)cwd[idx0 + 1]) << _cwd_len;
-          _cwd_len += (int)cwd_len[idx0 + 1];
+      /* per quad: emit samples 0..3; all four fused into one call when
+       * they fit the 64-bit accumulator, otherwise two calls of two
+       */
+      for (ui32 q = 0; q < VL; ++q) {
+        ui64 _cwd     = cwd[0][q];
+        int  _cwd_len = (int)cwd_len[0][q];
+        _cwd     |= ((ui64)cwd[1][q]) << _cwd_len;
+        _cwd_len += (int)cwd_len[1][q];
 
-          ui32 idx1 = (j + 1) * 2;
-          int len1 = (int)cwd_len[idx1] + (int)cwd_len[idx1 + 1];
-          if (likely(_cwd_len + len1 <= 64)) {
-            _cwd     |= ((ui64)cwd[idx1]) << _cwd_len;
-            _cwd_len += (int)cwd_len[idx1];
-            _cwd     |= ((ui64)cwd[idx1 + 1]) << _cwd_len;
-            _cwd_len += (int)cwd_len[idx1 + 1];
-            ms_encode_nodefer(msp, _cwd, _cwd_len);
-          } else {
-            ms_encode_nodefer(msp, _cwd, _cwd_len);
-            _cwd     = cwd[idx1];
-            _cwd_len = (int)cwd_len[idx1];
-            _cwd     |= ((ui64)cwd[idx1 + 1]) << _cwd_len;
-            _cwd_len += (int)cwd_len[idx1 + 1];
-            ms_encode_nodefer(msp, _cwd, _cwd_len);
-          }
+        int len1 = (int)cwd_len[2][q] + (int)cwd_len[3][q];
+        if (HWY_LIKELY(_cwd_len + len1 <= 64)) {
+          _cwd     |= ((ui64)cwd[2][q]) << _cwd_len;
+          _cwd_len += (int)cwd_len[2][q];
+          _cwd     |= ((ui64)cwd[3][q]) << _cwd_len;
+          _cwd_len += (int)cwd_len[3][q];
+          ms_encode_nodefer(msp, _cwd, _cwd_len);
+        } else {
+          ms_encode_nodefer(msp, _cwd, _cwd_len);
+          _cwd     = cwd[2][q];
+          _cwd_len = (int)cwd_len[2][q];
+          _cwd     |= ((ui64)cwd[3][q]) << _cwd_len;
+          _cwd_len += (int)cwd_len[3][q];
+          ms_encode_nodefer(msp, _cwd, _cwd_len);
         }
       }
       ms_drain(msp);
@@ -930,10 +716,9 @@ namespace ojph {
        * lep[0] = (ui8)e_q[3];
        * Compare e_q[1] with e_q[3] of the previous round.
        */
-      auto tmp = v_permute(eq_vec[3], left_shift_idx);
-      tmp = hn::InsertLane(tmp, 0, hn::GetLane(prev_e_val_vec));
+      auto tmp = v_shift_up(eq_vec[3], hn::GetLane(prev_e_val_vec));
       prev_e_val_vec = hn::InsertLane(v_zero(), 0,
-                                      hn::ExtractLane(eq_vec[3], 7));
+                                      hn::ExtractLane(eq_vec[3], VL - 1));
       e_val_vec[x] = v_max(eq_vec[1], tmp);
     }
 
@@ -944,10 +729,9 @@ namespace ojph {
        * lcxp[0] = (ui8)((rho[0] & 8) >> 3);
        * Or (rho[0] & 2) and (rho[0] of the previous round & 8).
        */
-      auto tmp = v_permute(rho_vec, left_shift_idx);
-      tmp = hn::InsertLane(tmp, 0, hn::GetLane(prev_cx_val_vec));
+      auto tmp = v_shift_up(rho_vec, hn::GetLane(prev_cx_val_vec));
       prev_cx_val_vec = hn::InsertLane(v_zero(), 0,
-                                       hn::ExtractLane(rho_vec, 7));
+                                       hn::ExtractLane(rho_vec, VL - 1));
 
       tmp = hn::And(tmp, hn::Set(du, 8));
       tmp = hn::ShiftRight<3>(tmp);
@@ -960,7 +744,7 @@ namespace ojph {
     static vec_u32 cal_tuple(vec_u32 &cq_vec, vec_u32 &rho_vec,
                              vec_u32 &eps_vec, ui32 *vlc_tbl)
     {
-      /* tuple[i] = vlc_tbl1[(c_q[i] << 8) + (rho[i] << 4) + eps[i]]; */
+      /* tuple[i] = enc_hwy_vlc_tbl1[(c_q[i] << 8) + (rho[i] << 4) + eps[i]]; */
       auto tmp = hn::ShiftLeft<8>(cq_vec);
       auto tmp1 = hn::ShiftLeft<4>(rho_vec);
       tmp = hn::Add(tmp, tmp1);
@@ -983,21 +767,17 @@ namespace ojph {
     {
       // c_q[i + 1] = (lcxp[i + 1] + (lcxp[i + 2] << 2))
       //            | (((rho[i] & 4) >> 1) | ((rho[i] & 8) >> 2));
-      using tag_u64 = hn::FixedTag<uint64_t, 4>;
-      constexpr tag_u64 d64;
 
-      auto lcxp1_vec = v_permute(cx_val_vec[x], right_shift_idx);
-      auto tmp = v_permute(lcxp1_vec, right_shift_idx);
-
-      // put lanes 0,1 of cx_val_vec[x + 1] into lanes 6,7
-      tmp = hn::BitCast(du, hn::InsertLane(hn::BitCast(d64, tmp), 3,
-        hn::GetLane(hn::BitCast(d64, cx_val_vec[x + 1]))));
+      // lcxp[i + 1]: the two top lanes come from the next iteration's
+      // cx values, lanes 0 and 1
+      auto lcxp1_vec = v_shift_down(cx_val_vec[x],
+                                    hn::GetLane(cx_val_vec[x + 1]));
+      auto tmp = v_shift_down(lcxp1_vec,
+                              hn::ExtractLane(cx_val_vec[x + 1], 1));
       tmp = hn::ShiftLeft<2>(tmp);
-      auto tmp1 = hn::InsertLane(lcxp1_vec, 7,
-                                 hn::GetLane(cx_val_vec[x + 1]));
-      tmp = hn::Add(tmp1, tmp);
+      tmp = hn::Add(lcxp1_vec, tmp);
 
-      tmp1 = hn::And(rho_vec, hn::Set(du, 4));
+      auto tmp1 = hn::And(rho_vec, hn::Set(du, 4));
       tmp1 = hn::ShiftRight<1>(tmp1);
       tmp = hn::Or(tmp, tmp1);
 
@@ -1011,10 +791,10 @@ namespace ojph {
                                  vec_u32 &rho_vec, vec_u32 u_q_vec,
                                  ui32 ignore)
     {
-      int32_t mel_need_encode[8];
-      int32_t mel_need_encode2[8];
-      int32_t mel_bit[8];
-      int32_t mel_bit2[8];
+      int32_t mel_need_encode[VL];
+      int32_t mel_need_encode2[VL];
+      int32_t mel_bit[VL];
+      int32_t mel_bit2[VL];
       /* Prepare mel_encode params */
       /* if (c_q[i] == 0) { */
       hn::StoreU(hn::BitCast(di, v_cmpeq(cq_vec, v_zero())), di,
@@ -1025,7 +805,8 @@ namespace ojph {
       /* } */
 
       /*   mel_encode(&mel, ojph_min(u_q[i], u_q[i + 1]) > 2); */
-      auto tmp = v_permute(u_q_vec, right_shift_idx);
+      // (only even i is read below, so the top lane's value is a don't-care)
+      auto tmp = hn::Slide1Down(du, u_q_vec);
       auto tmp1 = v_min(u_q_vec, tmp);
       hn::StoreU(hn::BitCast(di,
         hn::ShiftRight<31>(v_cmpgt(tmp1, hn::Set(du, 2)))), di, mel_bit2);
@@ -1036,7 +817,7 @@ namespace ojph {
         hn::And(need_encode2, v_cmpgt(tmp, v_zero()))), di,
         mel_need_encode2);
 
-      ui32 i_max = 8 - (ignore / 2);
+      ui32 i_max = VL - (ignore / 2);
 
       for (ui32 i = 0; i < i_max; i += 2) {
         if (mel_need_encode[i]) {
@@ -1063,14 +844,14 @@ namespace ojph {
 
       ui32 mask = (ui32)hn::BitsFromMask(du, hn::Eq(cq_vec, v_zero()));
 
-      ui32 i_max = 8 - (ignore / 2);
-      if (i_max < 8)
+      ui32 i_max = VL - (ignore / 2);
+      if (i_max < VL)
         mask &= (1u << i_max) - 1;
 
       if (mask == 0)
         return;
 
-      int32_t mel_bit[8];
+      int32_t mel_bit[VL];
       hn::StoreU(hn::BitCast(di,
         hn::ShiftRight<31>(v_cmpneq(rho_vec, v_zero()))), di, mel_bit);
 
@@ -1099,7 +880,7 @@ namespace ojph {
     static void proc_vlc_encode(vlc_struct *vlcp, ui32 *tuple,
                                 ui32 *u_q, ui32 ignore, const ui32 *uvlc_tbl)
     {
-      ui32 i_max = 8 - (ignore / 2);
+      ui32 i_max = VL - (ignore / 2);
 
       ui32 i = 0;
       for (; i + 2 < i_max; i += 4) {
@@ -1125,26 +906,26 @@ namespace ojph {
         vec_u32 *cx_val_vec, vec_u32 &prev_cx_val_vec,
         ui32 &prev_cq)
     {
-      ui32 *vlc_tbl = (PASS == 1) ? vlc_tbl0 : vlc_tbl1;
+      ui32 *vlc_tbl = (PASS == 1) ? enc_hwy_vlc_tbl0 : enc_hwy_vlc_tbl1;
 
       vec_u32 tmp, tmp1;
       vec_u32 eq_vec[4];
       vec_u32 s_vec[4];
       vec_u32 src_vec[4];
 
-      /* 16 bytes per iteration */
+      /* 2 * VL samples per line per iteration */
       for (ui32 x = 0; x < n_loop; ++x) {
 
         /* t = sp[i]; */
-        if ((x == (n_loop - 1)) && (_width % 16)) {
-          ui32 tmp_buf[16] = { 0 };
-          memcpy(tmp_buf, sp, (_width % 16) * sizeof(ui32));
+        if ((x == (n_loop - 1)) && (_width % (2 * VL))) {
+          ui32 tmp_buf[2 * VL] = { 0 };
+          memcpy(tmp_buf, sp, (_width % (2 * VL)) * sizeof(ui32));
           src_vec[0] = hn::LoadU(du, tmp_buf);
-          src_vec[2] = hn::LoadU(du, tmp_buf + 8);
+          src_vec[2] = hn::LoadU(du, tmp_buf + VL);
           if (y + 1 < height) {
-            memcpy(tmp_buf, sp + stride, (_width % 16) * sizeof(ui32));
+            memcpy(tmp_buf, sp + stride, (_width % (2 * VL)) * sizeof(ui32));
             src_vec[1] = hn::LoadU(du, tmp_buf);
-            src_vec[3] = hn::LoadU(du, tmp_buf + 8);
+            src_vec[3] = hn::LoadU(du, tmp_buf + VL);
           }
           else {
             src_vec[1] = v_zero();
@@ -1153,20 +934,20 @@ namespace ojph {
         }
         else {
           src_vec[0] = hn::LoadU(du, sp);
-          src_vec[2] = hn::LoadU(du, sp + 8);
+          src_vec[2] = hn::LoadU(du, sp + VL);
 
           if (y + 1 < height) {
             src_vec[1] = hn::LoadU(du, sp + stride);
-            src_vec[3] = hn::LoadU(du, sp + 8 + stride);
+            src_vec[3] = hn::LoadU(du, sp + VL + stride);
           }
           else {
             src_vec[1] = v_zero();
             src_vec[3] = v_zero();
           }
-          sp += 16;
+          sp += 2 * VL;
         }
 
-        /* Fast path: a chunk of 16 x 2 zero samples in a zero context
+        /* Fast path: a chunk of 2*VL x 2 zero samples in a zero context
          * (incoming c_q all zero) emits no VLC/MagSgn bits at all and
          * only advances the MEL zero-run; this is the common case for
          * mask-like content, where significant codeblocks are still
@@ -1182,9 +963,8 @@ namespace ojph {
           vec_u32 rho0 = v_zero();
           vec_u32 t = (PASS == 1) ? v_zero()
                                   : proc_cq2(x, cx_val_vec, rho0);
-          vec_u32 cq0_vec = v_permute(t, left_shift_idx);
-          cq0_vec = hn::InsertLane(cq0_vec, 0, prev_cq);
-          prev_cq = hn::ExtractLane(t, 7);
+          vec_u32 cq0_vec = v_shift_up(t, prev_cq);
+          prev_cq = hn::ExtractLane(t, VL - 1);
           // update_lep / update_lcxp with all-zero e_q and rho
           e_val_vec[x] = hn::InsertLane(v_zero(), 0,
                                         hn::GetLane(prev_e_val_vec));
@@ -1193,7 +973,7 @@ namespace ojph {
             (hn::GetLane(prev_cx_val_vec) & 8) >> 3);
           prev_cx_val_vec = v_zero();
           ui32 _ignore = ((n_loop - 1) == x) ? ignore : 0;
-          ui32 i_max = 8 - (_ignore / 2);
+          ui32 i_max = VL - (_ignore / 2);
           // proc_mel_encode1/2 issue one mel_encode(&mel, rho != 0),
           // i.e. a zero bit, per quad whose c_q is zero; since all the
           // bits are zero runs may be batched regardless of position
@@ -1207,15 +987,15 @@ namespace ojph {
             // codewords are zero-length, and m == 0 means no MagSgn
             // bits); everything else is as in the all-zero case
             vec_u32 tuple_vec = cal_tuple(cq0_vec, rho0, rho0,
-              (PASS == 1) ? vlc_tbl0 : vlc_tbl1);
-            ui32 u_q[10] = { 0 };
-            ui32 tuple[10];
+              (PASS == 1) ? enc_hwy_vlc_tbl0 : enc_hwy_vlc_tbl1);
+            ui32 u_q[VL + 2] = { 0 };
+            ui32 tuple[VL + 2];
             tuple_vec = hn::ShiftRight<4>(tuple_vec);
             hn::StoreU(tuple_vec, du, tuple);
             if (i_max & 1) tuple[i_max] = 0;
-            tuple[8] = 0;
+            tuple[VL] = 0;
             proc_vlc_encode(&vlc, tuple, u_q, _ignore,
-                (PASS == 1) ? uvlc_tbl_pair1 : uvlc_tbl_pair2);
+                (PASS == 1) ? enc_hwy_uvlc_tbl_pair1 : enc_hwy_uvlc_tbl_pair2);
           }
           continue;
         }
@@ -1224,8 +1004,7 @@ namespace ojph {
         proc_pixel(src_vec, p, eq_vec, s_vec, rho_vec, e_qmax_vec);
 
         // max_e[(i + 1) % num] = ojph_max(lep[i + 1], lep[i + 2]) - 1;
-        tmp = v_permute(e_val_vec[x], right_shift_idx);
-        tmp = hn::InsertLane(tmp, 7, hn::GetLane(e_val_vec[x + 1]));
+        tmp = v_shift_down(e_val_vec[x], hn::GetLane(e_val_vec[x + 1]));
 
         auto max_e_vec = v_max(tmp, e_val_vec[x]);
         max_e_vec = hn::Sub(max_e_vec, v_one());
@@ -1245,9 +1024,8 @@ namespace ojph {
         else
           tmp = proc_cq2(x, cx_val_vec, rho_vec);
 
-        auto cq_vec = v_permute(tmp, left_shift_idx);
-        cq_vec = hn::InsertLane(cq_vec, 0, prev_cq);
-        prev_cq = hn::ExtractLane(tmp, 7);
+        auto cq_vec = v_shift_up(tmp, prev_cq);
+        prev_cq = hn::ExtractLane(tmp, VL - 1);
 
         update_lep(x, prev_e_val_vec, eq_vec, e_val_vec);
         update_lcxp(x, prev_cx_val_vec, rho_vec, cx_val_vec);
@@ -1268,30 +1046,30 @@ namespace ojph {
 
         proc_ms_encode(&ms, tuple_vec, uq_vec, rho_vec, s_vec);
 
-        ui32 u_q[10];
-        ui32 tuple[10];
+        ui32 u_q[VL + 2];
+        ui32 tuple[VL + 2];
         tuple_vec = hn::ShiftRight<4>(tuple_vec);
         hn::StoreU(tuple_vec, du, tuple);
         hn::StoreU(u_q_vec, du, u_q);
         {
-          ui32 i_max = 8 - (_ignore / 2);
+          ui32 i_max = VL - (_ignore / 2);
           if (i_max & 1) { tuple[i_max] = 0; u_q[i_max] = 0; }
-          tuple[8] = 0; u_q[8] = 0;
+          tuple[VL] = 0; u_q[VL] = 0;
         }
         proc_vlc_encode(&vlc, tuple, u_q, _ignore,
-            (PASS == 1) ? uvlc_tbl_pair1 : uvlc_tbl_pair2);
+            (PASS == 1) ? enc_hwy_uvlc_tbl_pair1 : enc_hwy_uvlc_tbl_pair2);
       }
     }
 
-    void ojph_encode_codeblock_simd(ui32* buf, ui32 missing_msbs,
-                                   ui32 num_passes, ui32 _width, ui32 height,
-                                   ui32 stride, ui32* lengths,
-                                   ojph::mem_elastic_allocator *elastic,
-                                   ojph::coded_lists *& coded)
+    void hwy_encode_codeblock(ui32* buf, ui32 missing_msbs,
+                              ui32 num_passes, ui32 _width, ui32 height,
+                              ui32 stride, ui32* lengths,
+                              ojph::mem_elastic_allocator *elastic,
+                              ojph::coded_lists *& coded)
     {
       ojph_unused(num_passes);                      //currently not used
 
-      ui32 width = (_width + 15) & ~15u;
+      ui32 width = (_width + 2 * VL - 1) & ~(2 * VL - 1);
       ui32 ignore = width - _width;
       const int ms_size = (16384 * 16 + 14) / 15; //more than enough
       const int mel_vlc_size = 3072;              //more than enough
@@ -1321,15 +1099,15 @@ namespace ojph {
       //For a 1024 pixels, we need 512 bytes, the 2 extra,
       // one for the non-existing earlier quad, and one for beyond the
       // the end
-      ui32 n_loop = (width + 15) / 16;
+      ui32 n_loop = width / (2 * VL);
 
-      vec_u32 e_val_vec[65];
-      for (ui32 i = 0; i < ojph_min(64, n_loop); ++i)
+      vec_u32 e_val_vec[max_n_loop + 1];
+      for (ui32 i = 0; i < ojph_min(max_n_loop, n_loop); ++i)
         e_val_vec[i] = v_zero();
 
       vec_u32 prev_e_val_vec = v_zero();
 
-      vec_u32 cx_val_vec[65];
+      vec_u32 cx_val_vec[max_n_loop + 1];
       vec_u32 prev_cx_val_vec = v_zero();
 
       ui32 prev_cq = 0;
@@ -1360,10 +1138,9 @@ namespace ojph {
                            e_val_vec, prev_e_val_vec,
                            cx_val_vec, prev_cx_val_vec, prev_cq);
 
-        tmp = v_permute(cx_val_vec[0], right_shift_idx);
-        tmp = hn::ShiftLeft<2>(tmp);
-        tmp = hn::Add(tmp, cx_val_vec[0]);
-        prev_cq = hn::GetLane(tmp);
+        /* prev_cq = lcxp[0] + (lcxp[1] << 2); */
+        prev_cq = hn::ExtractLane(cx_val_vec[0], 0)
+                + (hn::ExtractLane(cx_val_vec[0], 1) << 2);
       }
 
       ms_terminate(&ms);
@@ -1387,7 +1164,264 @@ namespace ojph {
       coded->avail_size -= lengths[0];
     }
 
+#endif // HWY_TARGET == HWY_SCALAR
+
+    } /* namespace HWY_NAMESPACE */
   } /* namespace local */
 } /* namespace ojph */
+HWY_AFTER_NAMESPACE();
+
+//***************************************************************************/
+// once-per-TU section: the shared tables, their initialization, and the
+// dynamic-dispatch entry point
+#if HWY_ONCE
+namespace ojph {
+  namespace local {
+
+    /////////////////////////////////////////////////////////////////////////
+    // tables
+    /////////////////////////////////////////////////////////////////////////
+
+    //VLC encoding
+    // index is (c_q << 8) + (rho << 4) + eps
+    // data is  (cwd << 8) + (cwd_len << 4) + eps
+    // table 0 is for the initial line of quads
+    ui32 enc_hwy_vlc_tbl0[2048];
+    ui32 enc_hwy_vlc_tbl1[2048];
+
+    //UVLC encoding
+    ui32 enc_hwy_uvlc_tbl_pair1[33 * 33];
+    ui32 enc_hwy_uvlc_tbl_pair2[33 * 33];
+    static ui32 ulvc_cwd_pre[33];
+    static int ulvc_cwd_pre_len[33];
+    static ui32 ulvc_cwd_suf[33];
+    static int ulvc_cwd_suf_len[33];
+
+    /////////////////////////////////////////////////////////////////////////
+    static bool vlc_init_tables()
+    {
+      struct vlc_src_table { int c_q, rho, u_off, e_k, e_1, cwd, cwd_len; };
+      vlc_src_table tbl0[] = {
+    #include "table0.h"
+      };
+      size_t tbl0_size = sizeof(tbl0) / sizeof(vlc_src_table);
+
+      si32 pattern_popcnt[16];
+      for (ui32 i = 0; i < 16; ++i)
+        pattern_popcnt[i] = (si32)population_count(i);
+
+      vlc_src_table* src_tbl = tbl0;
+      ui32 *tgt_tbl = enc_hwy_vlc_tbl0;
+      size_t tbl_size = tbl0_size;
+      for (int i = 0; i < 2048; ++i)
+      {
+        int c_q = i >> 8, rho = (i >> 4) & 0xF, emb = i & 0xF;
+        if (((emb & rho) != emb) || (rho == 0 && c_q == 0))
+          tgt_tbl[i] = 0;
+        else
+        {
+          vlc_src_table *best_entry = NULL;
+          if (emb) // u_off = 1
+          {
+            int best_e_k = -1;
+            for (size_t j = 0; j < tbl_size; ++j)
+            {
+              if (src_tbl[j].c_q == c_q && src_tbl[j].rho == rho)
+                if (src_tbl[j].u_off == 1)
+                  if ((emb & src_tbl[j].e_k) == src_tbl[j].e_1)
+                  {
+                    //now we need to find the smallest cwd with the highest
+                    // number of bits set in e_k
+                    int ones_count = pattern_popcnt[src_tbl[j].e_k];
+                    if (ones_count >= best_e_k)
+                    {
+                      best_entry = src_tbl + j;
+                      best_e_k = ones_count;
+                    }
+                  }
+            }
+          }
+          else // u_off = 0
+          {
+            for (size_t j = 0; j < tbl_size; ++j)
+            {
+              if (src_tbl[j].c_q == c_q && src_tbl[j].rho == rho)
+                if (src_tbl[j].u_off == 0)
+                {
+                  best_entry = src_tbl + j;
+                  break;
+                }
+            }
+          }
+          assert(best_entry);
+          tgt_tbl[i] = (ui16)((best_entry->cwd<<8) + (best_entry->cwd_len<<4)
+                             + best_entry->e_k);
+        }
+      }
+
+      vlc_src_table tbl1[] = {
+    #include "table1.h"
+      };
+      size_t tbl1_size = sizeof(tbl1) / sizeof(vlc_src_table);
+
+      src_tbl = tbl1;
+      tgt_tbl = enc_hwy_vlc_tbl1;
+      tbl_size = tbl1_size;
+      for (int i = 0; i < 2048; ++i)
+      {
+        int c_q = i >> 8, rho = (i >> 4) & 0xF, emb = i & 0xF;
+        if (((emb & rho) != emb) || (rho == 0 && c_q == 0))
+          tgt_tbl[i] = 0;
+        else
+        {
+          vlc_src_table *best_entry = NULL;
+          if (emb) // u_off = 1
+          {
+            int best_e_k = -1;
+            for (size_t j = 0; j < tbl_size; ++j)
+            {
+              if (src_tbl[j].c_q == c_q && src_tbl[j].rho == rho)
+                if (src_tbl[j].u_off == 1)
+                  if ((emb & src_tbl[j].e_k) == src_tbl[j].e_1)
+                  {
+                    //now we need to find the smallest cwd with the highest
+                    // number of bits set in e_k
+                    int ones_count = pattern_popcnt[src_tbl[j].e_k];
+                    if (ones_count >= best_e_k)
+                    {
+                      best_entry = src_tbl + j;
+                      best_e_k = ones_count;
+                    }
+                  }
+            }
+          }
+          else // u_off = 0
+          {
+            for (size_t j = 0; j < tbl_size; ++j)
+            {
+              if (src_tbl[j].c_q == c_q && src_tbl[j].rho == rho)
+                if (src_tbl[j].u_off == 0)
+                {
+                  best_entry = src_tbl + j;
+                  break;
+                }
+            }
+          }
+          assert(best_entry);
+          tgt_tbl[i] = (ui16)((best_entry->cwd<<8) + (best_entry->cwd_len<<4)
+                             + best_entry->e_k);
+        }
+      }
+
+
+      return true;
+    }
+
+    /////////////////////////////////////////////////////////////////////////
+    static bool uvlc_init_tables()
+    {
+      //code goes from 0 to 31, extension and 32 are not supported here
+      ulvc_cwd_pre[0] = 0; ulvc_cwd_pre[1] = 1; ulvc_cwd_pre[2] = 2;
+      ulvc_cwd_pre[3] = 4; ulvc_cwd_pre[4] = 4;
+      ulvc_cwd_pre_len[0] = 0; ulvc_cwd_pre_len[1] = 1;
+      ulvc_cwd_pre_len[2] = 2;
+      ulvc_cwd_pre_len[3] = 3; ulvc_cwd_pre_len[4] = 3;
+      ulvc_cwd_suf[0] = 0; ulvc_cwd_suf[1] = 0; ulvc_cwd_suf[2] = 0;
+      ulvc_cwd_suf[3] = 0; ulvc_cwd_suf[4] = 1;
+      ulvc_cwd_suf_len[0] = 0; ulvc_cwd_suf_len[1] = 0;
+      ulvc_cwd_suf_len[2] = 0;
+      ulvc_cwd_suf_len[3] = 1; ulvc_cwd_suf_len[4] = 1;
+      for (int i = 5; i < 33; ++i)
+      {
+        ulvc_cwd_pre[i] = 0;
+        ulvc_cwd_pre_len[i] = 3;
+        ulvc_cwd_suf[i] = (ui32)(i-5);
+        ulvc_cwd_suf_len[i] = 5;
+      }
+      return true;
+    }
+
+    /////////////////////////////////////////////////////////////////////////
+    static void uvlc_init_pair_tables()
+    {
+      for (int uq0 = 0; uq0 < 33; ++uq0) {
+        for (int uq1 = 0; uq1 < 33; ++uq1) {
+          ui32 cwd; int len;
+
+          cwd = 0; len = 0;
+          if (uq0 > 2 && uq1 > 2) {
+            cwd |= ulvc_cwd_pre[uq0 - 2];
+            len += ulvc_cwd_pre_len[uq0 - 2];
+            cwd |= ulvc_cwd_pre[uq1 - 2] << len;
+            len += ulvc_cwd_pre_len[uq1 - 2];
+            cwd |= ulvc_cwd_suf[uq0 - 2] << len;
+            len += ulvc_cwd_suf_len[uq0 - 2];
+            cwd |= ulvc_cwd_suf[uq1 - 2] << len;
+            len += ulvc_cwd_suf_len[uq1 - 2];
+          } else if (uq0 > 2 && uq1 > 0) {
+            cwd |= ulvc_cwd_pre[uq0];
+            len += ulvc_cwd_pre_len[uq0];
+            cwd |= (ui32)(uq1 - 1) << len;
+            len += 1;
+            cwd |= ulvc_cwd_suf[uq0] << len;
+            len += ulvc_cwd_suf_len[uq0];
+          } else {
+            cwd |= ulvc_cwd_pre[uq0];
+            len += ulvc_cwd_pre_len[uq0];
+            cwd |= ulvc_cwd_pre[uq1] << len;
+            len += ulvc_cwd_pre_len[uq1];
+            cwd |= ulvc_cwd_suf[uq0] << len;
+            len += ulvc_cwd_suf_len[uq0];
+            cwd |= ulvc_cwd_suf[uq1] << len;
+            len += ulvc_cwd_suf_len[uq1];
+          }
+          enc_hwy_uvlc_tbl_pair1[uq0 * 33 + uq1] = (cwd << 5) | (ui32)len;
+
+          cwd = 0; len = 0;
+          cwd |= ulvc_cwd_pre[uq0];
+          len += ulvc_cwd_pre_len[uq0];
+          cwd |= ulvc_cwd_pre[uq1] << len;
+          len += ulvc_cwd_pre_len[uq1];
+          cwd |= ulvc_cwd_suf[uq0] << len;
+          len += ulvc_cwd_suf_len[uq0];
+          cwd |= ulvc_cwd_suf[uq1] << len;
+          len += ulvc_cwd_suf_len[uq1];
+          enc_hwy_uvlc_tbl_pair2[uq0 * 33 + uq1] = (cwd << 5) | (ui32)len;
+        }
+      }
+    }
+
+    /////////////////////////////////////////////////////////////////////////
+    bool initialize_block_encoder_tables_simd() {
+      static bool tables_initialized = false;
+      static std::once_flag tables_initialized_flag;
+      std::call_once(tables_initialized_flag, []() {
+        memset(enc_hwy_vlc_tbl0, 0, 2048 * sizeof(ui32));
+        memset(enc_hwy_vlc_tbl1, 0, 2048 * sizeof(ui32));
+        tables_initialized = vlc_init_tables();
+        tables_initialized = tables_initialized && uvlc_init_tables();
+        uvlc_init_pair_tables();
+      });
+      return tables_initialized;
+    }
+
+    /////////////////////////////////////////////////////////////////////////
+    // dynamic dispatch: one entry in the table per compiled target; the
+    // first call selects the best target the CPU supports
+    HWY_EXPORT(hwy_encode_codeblock);
+
+    void ojph_encode_codeblock_simd(ui32* buf, ui32 missing_msbs,
+                                   ui32 num_passes, ui32 _width, ui32 height,
+                                   ui32 stride, ui32* lengths,
+                                   ojph::mem_elastic_allocator *elastic,
+                                   ojph::coded_lists *& coded)
+    {
+      HWY_DYNAMIC_DISPATCH(hwy_encode_codeblock)(buf, missing_msbs,
+        num_passes, _width, height, stride, lengths, elastic, coded);
+    }
+
+  } /* namespace local */
+} /* namespace ojph */
+#endif // HWY_ONCE
 
 #endif
