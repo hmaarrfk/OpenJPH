@@ -53,6 +53,7 @@
 #ifdef OJPH_ENABLE_HWY
 
 #include <cassert>
+#include <climits>
 
 #include "ojph_defs.h"
 #include "ojph_mem.h"
@@ -122,6 +123,179 @@ namespace ojph {
                      du32h, (ui32*)dp + i);
         }
       }
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    // Round float lanes to the nearest integer, ties to even.  The x86
+    // targets provide NearestIntInRange (a bare cvtps2dq); the portable
+    // fallback targets in this hwy version do not, so use NearestInt
+    // there -- the fallback only has to compile, since the install gate
+    // in install_colour_transforms() never dispatches to it (the two
+    // only differ for out-of-range lanes, which the callers overwrite
+    // when clipping anyway).
+    template <class DI32, class VF>
+    static inline hn::VFromD<DI32> nearest_int(DI32 di32, VF v)
+    {
+#if HWY_TARGET == HWY_EMU128 || HWY_TARGET == HWY_SCALAR
+      (void)di32;
+      return hn::NearestInt(v);
+#else
+      return hn::NearestIntInRange(di32, v);
+#endif
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    // Convert the float line produced by the inverse irreversible
+    // transform to integers, clipping values that exceed what bit_depth
+    // supports; the vector equivalent of gen_irv_convert_to_integer.
+    // Rounding uses the vector round-to-nearest-even conversion, like
+    // the SSE2/AVX2 implementations this replaces (the generic
+    // implementation rounds half away from zero, so results can differ
+    // from it at exact .5 ties; this mirrors the historical behaviour).
+    // Like the other loops in this file, the loops overrun the line
+    // ends by less than one vector; the lines are padded.
+    template<bool NLT_TYPE3>
+    static inline
+    void local_simd_irv_convert_to_integer(const line_buf *src_line,
+      line_buf *dst_line, ui32 dst_line_offset,
+      ui32 bit_depth, bool is_signed, ui32 width)
+    {
+      assert((src_line->flags & line_buf::LFT_32BIT) &&
+             (src_line->flags & line_buf::LFT_INTEGER) == 0 &&
+             (dst_line->flags & line_buf::LFT_32BIT) &&
+             (dst_line->flags & line_buf::LFT_INTEGER));
+      assert(bit_depth <= 32);
+
+      const hn::ScalableTag<float> df;
+      const hn::RebindToSigned<decltype(df)> d32;
+      const int L = (int)hn::Lanes(df);
+
+      // values outside the half-closed interval [-0.5f, 0.5f) are
+      // clipped to the range bit_depth supports (see the generic
+      // implementation for the reasoning)
+      const si32 neg_limit = (si32)INT_MIN >> (32 - bit_depth);
+      const auto mul = hn::Set(df, (float)(1ull << bit_depth));
+      const auto fl_up_lim  = hn::Set(df, -(float)neg_limit); // val < up
+      const auto fl_low_lim = hn::Set(df, (float)neg_limit);  // val >= low
+      const auto s32_up_lim  = hn::Set(d32, INT_MAX >> (32 - bit_depth));
+      const auto s32_low_lim = hn::Set(d32, INT_MIN >> (32 - bit_depth));
+
+      const float* sp = src_line->f32;
+      si32* dp = dst_line->i32 + dst_line_offset;
+      if (is_signed)
+      {
+        const auto bias =
+          hn::Set(d32, -(si32)((1ULL << (bit_depth - 1)) + 1));
+        for (int i = (int)width; i > 0; i -= L, sp += L, dp += L)
+        {
+          auto t = hn::Mul(hn::LoadU(df, sp), mul);
+          auto u = nearest_int(d32, t);
+          u = hn::IfThenElse(hn::RebindMask(d32, hn::Ge(t, fl_low_lim)),
+                             u, s32_low_lim);
+          u = hn::IfThenElse(hn::RebindMask(d32, hn::Lt(t, fl_up_lim)),
+                             u, s32_up_lim);
+          if (NLT_TYPE3)
+            u = hn::IfNegativeThenElse(u, hn::Sub(bias, u), u);
+          hn::StoreU(u, d32, dp);
+        }
+      }
+      else
+      {
+        const auto half = hn::Set(d32, (si32)(1ULL << (bit_depth - 1)));
+        for (int i = (int)width; i > 0; i -= L, sp += L, dp += L)
+        {
+          auto t = hn::Mul(hn::LoadU(df, sp), mul);
+          auto u = nearest_int(d32, t);
+          u = hn::IfThenElse(hn::RebindMask(d32, hn::Ge(t, fl_low_lim)),
+                             u, s32_low_lim);
+          u = hn::IfThenElse(hn::RebindMask(d32, hn::Lt(t, fl_up_lim)),
+                             u, s32_up_lim);
+          hn::StoreU(hn::Add(u, half), d32, dp);
+        }
+      }
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    void simd_irv_convert_to_integer(const line_buf *src_line,
+      line_buf *dst_line, ui32 dst_line_offset,
+      ui32 bit_depth, bool is_signed, ui32 width)
+    {
+      local_simd_irv_convert_to_integer<false>(src_line, dst_line,
+        dst_line_offset, bit_depth, is_signed, width);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    void simd_irv_convert_to_integer_nlt_type3(const line_buf *src_line,
+      line_buf *dst_line, ui32 dst_line_offset,
+      ui32 bit_depth, bool is_signed, ui32 width)
+    {
+      local_simd_irv_convert_to_integer<true>(src_line, dst_line,
+        dst_line_offset, bit_depth, is_signed, width);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    // Convert an integer line to the floats fed to the forward
+    // irreversible transform, undoing the level shift; the vector
+    // equivalent of gen_irv_convert_to_float (values identical)
+    template<bool NLT_TYPE3>
+    static inline
+    void local_simd_irv_convert_to_float(const line_buf *src_line,
+      ui32 src_line_offset, line_buf *dst_line,
+      ui32 bit_depth, bool is_signed, ui32 width)
+    {
+      assert((src_line->flags & line_buf::LFT_32BIT) &&
+             (src_line->flags & line_buf::LFT_INTEGER) &&
+             (dst_line->flags & line_buf::LFT_32BIT) &&
+             (dst_line->flags & line_buf::LFT_INTEGER) == 0);
+      assert(bit_depth <= 32);
+
+      const hn::ScalableTag<float> df;
+      const hn::RebindToSigned<decltype(df)> d32;
+      const int L = (int)hn::Lanes(df);
+      const auto mul =
+        hn::Set(df, (float)(1.0 / (double)(1ULL << bit_depth)));
+
+      const si32* sp = src_line->i32 + src_line_offset;
+      float* dp = dst_line->f32;
+      if (is_signed)
+      {
+        const auto bias =
+          hn::Set(d32, -(si32)((1ULL << (bit_depth - 1)) + 1));
+        for (int i = (int)width; i > 0; i -= L, sp += L, dp += L)
+        {
+          auto t = hn::LoadU(d32, sp);
+          if (NLT_TYPE3)
+            t = hn::IfNegativeThenElse(t, hn::Sub(bias, t), t);
+          hn::StoreU(hn::Mul(hn::ConvertTo(df, t), mul), df, dp);
+        }
+      }
+      else
+      {
+        const auto half = hn::Set(d32, (si32)(1ULL << (bit_depth - 1)));
+        for (int i = (int)width; i > 0; i -= L, sp += L, dp += L)
+        {
+          auto t = hn::Sub(hn::LoadU(d32, sp), half);
+          hn::StoreU(hn::Mul(hn::ConvertTo(df, t), mul), df, dp);
+        }
+      }
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    void simd_irv_convert_to_float(const line_buf *src_line,
+      ui32 src_line_offset, line_buf *dst_line,
+      ui32 bit_depth, bool is_signed, ui32 width)
+    {
+      local_simd_irv_convert_to_float<false>(src_line, src_line_offset,
+        dst_line, bit_depth, is_signed, width);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    void simd_irv_convert_to_float_nlt_type3(const line_buf *src_line,
+      ui32 src_line_offset, line_buf *dst_line,
+      ui32 bit_depth, bool is_signed, ui32 width)
+    {
+      local_simd_irv_convert_to_float<true>(src_line, src_line_offset,
+        dst_line, bit_depth, is_signed, width);
     }
 
     //////////////////////////////////////////////////////////////////////////
@@ -338,6 +512,10 @@ namespace ojph {
     HWY_EXPORT(simd_rct_backward);
     HWY_EXPORT(simd_ict_forward);
     HWY_EXPORT(simd_ict_backward);
+    HWY_EXPORT(simd_irv_convert_to_integer);
+    HWY_EXPORT(simd_irv_convert_to_integer_nlt_type3);
+    HWY_EXPORT(simd_irv_convert_to_float);
+    HWY_EXPORT(simd_irv_convert_to_float_nlt_type3);
 
     //////////////////////////////////////////////////////////////////////////
     static
@@ -385,6 +563,46 @@ namespace ojph {
     }
 
     //////////////////////////////////////////////////////////////////////////
+    static
+    void simd_irv_convert_to_integer(const line_buf *src_line,
+      line_buf *dst_line, ui32 dst_line_offset,
+      ui32 bit_depth, bool is_signed, ui32 width)
+    {
+      HWY_DYNAMIC_DISPATCH(simd_irv_convert_to_integer)(src_line,
+        dst_line, dst_line_offset, bit_depth, is_signed, width);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    static
+    void simd_irv_convert_to_integer_nlt_type3(const line_buf *src_line,
+      line_buf *dst_line, ui32 dst_line_offset,
+      ui32 bit_depth, bool is_signed, ui32 width)
+    {
+      HWY_DYNAMIC_DISPATCH(simd_irv_convert_to_integer_nlt_type3)(src_line,
+        dst_line, dst_line_offset, bit_depth, is_signed, width);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    static
+    void simd_irv_convert_to_float(const line_buf *src_line,
+      ui32 src_line_offset, line_buf *dst_line,
+      ui32 bit_depth, bool is_signed, ui32 width)
+    {
+      HWY_DYNAMIC_DISPATCH(simd_irv_convert_to_float)(src_line,
+        src_line_offset, dst_line, bit_depth, is_signed, width);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    static
+    void simd_irv_convert_to_float_nlt_type3(const line_buf *src_line,
+      ui32 src_line_offset, line_buf *dst_line,
+      ui32 bit_depth, bool is_signed, ui32 width)
+    {
+      HWY_DYNAMIC_DISPATCH(simd_irv_convert_to_float_nlt_type3)(src_line,
+        src_line_offset, dst_line, bit_depth, is_signed, width);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
     void install_colour_transforms()
     {
 #if defined(OJPH_ARCH_X86_64) || defined(OJPH_ARCH_I386)
@@ -420,6 +638,12 @@ namespace ojph {
       rct_backward = simd_rct_backward;
       ict_forward  = simd_ict_forward;
       ict_backward = simd_ict_backward;
+      irv_convert_to_integer = simd_irv_convert_to_integer;
+      irv_convert_to_float   = simd_irv_convert_to_float;
+      irv_convert_to_integer_nlt_type3 =
+        simd_irv_convert_to_integer_nlt_type3;
+      irv_convert_to_float_nlt_type3 =
+        simd_irv_convert_to_float_nlt_type3;
     }
 
   } // !local namespace
