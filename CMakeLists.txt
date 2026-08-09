@@ -35,6 +35,43 @@ if (CMAKE_OSX_ARCHITECTURES)
   unset(arm64_index)
 endif()
 
+## Distinguish the real MSVC compiler (cl.exe) from clang-cl
+# CMake sets MSVC=TRUE for every compiler that accepts an MSVC-style
+# command line, which includes clang-cl (LLVM's MSVC-compatible driver).
+# The two differ where it matters for SIMD: cl.exe has no per-function
+# target attributes, so Google Highway cannot compile targets beyond the
+# translation unit's /arch level (and hwy disables its AVX-512 targets on
+# MSVC as broken), while clang-cl compiles the same attribute-based
+# multiversioning as GCC/Clang and reaches every x86 target.  clang-cl
+# accepts GCC-style -m machine flags, so it takes the GCC/Clang flag
+# spelling below; only true MSVC keeps the /arch:AVX2 spelling.
+# CMAKE_CXX_COMPILER_FRONTEND_VARIANT requires CMake >= 3.14; on older
+# CMake it is empty and clang-cl falls back to the (safe, degraded)
+# true-MSVC /arch:AVX2 path.
+set(OJPH_COMPILER_CLANG_CL FALSE)
+if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang"
+    AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+  set(OJPH_COMPILER_CLANG_CL TRUE)
+  message(STATUS "Compiler is clang-cl (Clang with MSVC-compatible driver)")
+endif()
+if (MSVC AND NOT OJPH_COMPILER_CLANG_CL)
+  set(OJPH_COMPILER_MSVC_TRUE TRUE)
+else()
+  set(OJPH_COMPILER_MSVC_TRUE FALSE)
+endif()
+
+# Spelling of -ffp-contract=off per driver: the clang-cl driver ignores
+# bare -f flags it does not know ("unknown argument ignored in clang-cl"),
+# but forwards anything given via /clang: to the GCC-style driver.  The
+# flag keeps float (irv/ICT) kernels from fusing mul+add into fma so their
+# output stays byte-identical to the generic implementation; losing it
+# silently would break codestream parity, hence the explicit spelling.
+if (OJPH_COMPILER_CLANG_CL)
+  set(OJPH_FFP_CONTRACT_OFF "/clang:-ffp-contract=off")
+else()
+  set(OJPH_FFP_CONTRACT_OFF "-ffp-contract=off")
+endif()
+
 ## options
 option(BUILD_SHARED_LIBS "Shared Libraries" ON)
 option(OJPH_ENABLE_TIFF_SUPPORT "Enables input and output support for TIFF files" ON)

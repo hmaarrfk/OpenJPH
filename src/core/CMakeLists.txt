@@ -50,8 +50,9 @@ if(NOT EMSCRIPTEN)
         source_group("codestream" FILES ${CODESTREAM_HWY})
       endif()
 
-      # Set compilation flags
-      if (MSVC)
+      # Set compilation flags.  OJPH_COMPILER_MSVC_TRUE is cl.exe only;
+      # clang-cl takes the GCC/Clang branch (it accepts -m machine flags).
+      if (OJPH_COMPILER_MSVC_TRUE)
         set_source_files_properties(codestream/ojph_codestream_avx2.cpp PROPERTIES COMPILE_FLAGS "/arch:AVX2")
         set_source_files_properties(coding/ojph_block_decoder_avx2.cpp PROPERTIES COMPILE_FLAGS "/arch:AVX2")
         set_source_files_properties(coding/ojph_block_encoder_hwy.cpp PROPERTIES COMPILE_FLAGS "/arch:AVX2")
@@ -72,11 +73,11 @@ if(NOT EMSCRIPTEN)
         # The width-portable data-movement kernels use foreach_target.h
         # run-time dispatch; see the transform/colour block below for the
         # flag rationale.
-        if (MSVC)
+        if (OJPH_COMPILER_MSVC_TRUE)
           set_source_files_properties(codestream/ojph_codestream_hwy.cpp PROPERTIES COMPILE_FLAGS "/arch:AVX2")
         else()
           set_source_files_properties(codestream/ojph_codestream_hwy.cpp
-            PROPERTIES COMPILE_FLAGS "-ffp-contract=off"
+            PROPERTIES COMPILE_FLAGS "${OJPH_FFP_CONTRACT_OFF}"
             COMPILE_DEFINITIONS
             "HWY_DISABLED_TARGETS=(HWY_SSE2|HWY_SSSE3);HWY_BROKEN_EMU128=0")
         endif()
@@ -100,7 +101,7 @@ if (OJPH_ENABLE_HWY AND (NOT OJPH_DISABLE_SIMD) AND (NOT EMSCRIPTEN)
   source_group("transform" FILES ${TRANSFORM_HWY})
   if (("${OJPH_TARGET_ARCH}" MATCHES "OJPH_ARCH_X86_64")
       OR ("${OJPH_TARGET_ARCH}" MATCHES "OJPH_ARCH_I386"))
-    if (MSVC)
+if (OJPH_COMPILER_MSVC_TRUE)
       # MSVC lacks per-function target attributes below AVX; hwy then
       # compiles the baseline the flags select and better, so /arch:AVX2
       # keeps today's AVX2 floor (plus the AVX3 targets) on Windows
@@ -108,7 +109,7 @@ if (OJPH_ENABLE_HWY AND (NOT OJPH_DISABLE_SIMD) AND (NOT EMSCRIPTEN)
         transform/ojph_colour_hwy.cpp
         PROPERTIES COMPILE_FLAGS "/arch:AVX2")
     else()
-      # no target flags: foreach_target.h needs the baseline left low
+# no target flags: foreach_target.h needs the baseline left low
       # (per-target code is built with function target attributes), so
       # the compiled targets span SSE4 through AVX3_SPR; SSE2/SSSE3 are
       # disabled to bound the target count.  With them disabled, the
@@ -116,11 +117,12 @@ if (OJPH_ENABLE_HWY AND (NOT OJPH_DISABLE_SIMD) AND (NOT EMSCRIPTEN)
       # older than 16 would otherwise pick HWY_SCALAR, which lacks some
       # of the ops used here) -- the fallback only has to compile, since
       # the install gates never dispatch below SSE4.
-      # -ffp-contract=off keeps the float (irv/ICT) kernels from fusing
+      # OJPH_FFP_CONTRACT_OFF (-ffp-contract=off, spelled per driver in the
+      # top-level CMakeLists) keeps the float (irv/ICT) kernels from fusing
       # mul+add into fma, so their values match the generic implementation
       set_source_files_properties(transform/ojph_transform_hwy.cpp
         transform/ojph_colour_hwy.cpp
-        PROPERTIES COMPILE_FLAGS "-ffp-contract=off"
+        PROPERTIES COMPILE_FLAGS "${OJPH_FFP_CONTRACT_OFF}"
         COMPILE_DEFINITIONS
         "HWY_DISABLED_TARGETS=(HWY_SSE2|HWY_SSSE3);HWY_BROKEN_EMU128=0")
     endif()
