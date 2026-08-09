@@ -885,14 +885,23 @@ namespace ojph {
 
     //////////////////////////////////////////////////////////////////////////
     // multiply a line by a constant factor; like the lifting loops below,
-    // the loop overruns the line end by less than one vector
+    // the loops overrun the line end by less than one vector.  The
+    // two-vector main loop and the pointer-bumping structure measure
+    // considerably faster than a single indexed loop (gcc folds the
+    // loads into the multiply and halves the loop overhead)
     static inline void multiply_const(float* p, float f, ui32 width)
     {
       const hn::ScalableTag<float> d;
-      const ui32 L = (ui32)hn::Lanes(d);
+      const int L = (int)hn::Lanes(d);
       const auto vf = hn::Set(d, f);
-      for (ui32 i = 0; i < width; i += L)
-        hn::StoreU(hn::Mul(vf, hn::LoadU(d, p + i)), d, p + i);
+      int i = (int)width;
+      for (; i >= 2 * L; i -= 2 * L, p += 2 * L)
+      {
+        hn::StoreU(hn::Mul(vf, hn::LoadU(d, p)), d, p);
+        hn::StoreU(hn::Mul(vf, hn::LoadU(d, p + L)), d, p + L);
+      }
+      for (; i > 0; i -= L, p += L)
+        hn::StoreU(hn::Mul(vf, hn::LoadU(d, p)), d, p);
     }
 
     //////////////////////////////////////////////////////////////////////////
