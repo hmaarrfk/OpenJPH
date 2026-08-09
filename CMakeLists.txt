@@ -96,7 +96,18 @@ if (DEFINED OJPH_DISABLE_INTEL_SIMD)
   unset(OJPH_DISABLE_INTEL_SIMD)
 endif()
 
-## Google Highway detection; header-only usage (static dispatch)
+## Google Highway detection
+# The hwy kernels are x86-only for now (they use x86-only Highway APIs such
+# as NearestIntInRange, and the dispatch sites are x86-gated), so other
+# architectures build the generic kernels. That is an expected configuration,
+# not a failure: OJPH_REQUIRE_HWY only enforces hwy where it can exist.
+if (OJPH_ENABLE_HWY AND NOT (("${OJPH_TARGET_ARCH}" MATCHES "OJPH_ARCH_X86_64")
+                             OR ("${OJPH_TARGET_ARCH}" MATCHES "OJPH_ARCH_I386")))
+  message(STATUS "The hwy kernels are currently x86-only; building the "
+                 "generic kernels for ${OJPH_TARGET_ARCH}")
+  set(OJPH_ENABLE_HWY OFF)
+  set(OJPH_REQUIRE_HWY OFF)
+endif()
 if (OJPH_ENABLE_HWY)
   find_path(OJPH_HWY_INCLUDE_DIR NAMES hwy/highway.h
             HINTS $ENV{CONDA_PREFIX}/include)
@@ -104,9 +115,17 @@ if (OJPH_ENABLE_HWY)
     # The kernels use APIs newer than some distribution packages (e.g.
     # NearestIntInRange, absent from Ubuntu's libhwy 1.0.x), so probe the
     # found headers for what is actually needed instead of trusting a
-    # version number.
+    # version number. Highway needs C++11+, but some compilers (AppleClang)
+    # default to an older standard, so pin the probe to the standard the
+    # kernels build with; without this the probe fails spuriously and
+    # reports usable headers as too old.
     include(CheckCXXSourceCompiles)
     set(CMAKE_REQUIRED_INCLUDES "${OJPH_HWY_INCLUDE_DIR}")
+    if (OJPH_COMPILER_MSVC_TRUE)
+      set(CMAKE_REQUIRED_FLAGS "/std:c++17")
+    else()
+      set(CMAKE_REQUIRED_FLAGS "-std=c++17")
+    endif()
     check_cxx_source_compiles("
       #include <hwy/highway.h>
       namespace hn = hwy::HWY_NAMESPACE;
@@ -116,6 +135,7 @@ if (OJPH_ENABLE_HWY)
         return (int)hn::GetLane(hn::NearestIntInRange(di, hn::Zero(df)));
       }" OJPH_HWY_IS_USABLE)
     unset(CMAKE_REQUIRED_INCLUDES)
+    unset(CMAKE_REQUIRED_FLAGS)
     if (NOT OJPH_HWY_IS_USABLE)
       if (OJPH_REQUIRE_HWY)
         message(FATAL_ERROR "Google Highway headers at "
