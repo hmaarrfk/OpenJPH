@@ -182,6 +182,16 @@ namespace ojph {
           #include <asm/hwcap.h>
         #endif
 
+        // Kernel ABI constants; old kernel headers (e.g. a glibc 2.17
+        // sysroot) predate them, but getauxval still reports the bits on a
+        // capable kernel, so define the values rather than lose detection.
+        #ifndef HWCAP_SVE
+          #define HWCAP_SVE (1 << 22)
+        #endif
+        #ifndef HWCAP2_SVE2
+          #define HWCAP2_SVE2 (1 << 1)
+        #endif
+
         bool init_cpu_ext_level(int& level) {
           #ifdef OJPH_OS_LINUX
             unsigned long hwcaps = getauxval(AT_HWCAP);
