@@ -9,9 +9,36 @@
 #include "ojph_params.h"
 #include "ojph_codestream.h"
 
+// compile with -DOJPH_BENCH_HAVE_HWY (and link -lhwy) to allow forcing
+// the hwy dispatch target through the OJPH_FORCE_TARGET environment
+// variable (sse4, avx2, avx3, avx3_dl, avx3_spr, emu128, scalar)
+#ifdef OJPH_BENCH_HAVE_HWY
+#include <cstring>
+#include <hwy/targets.h>
+static void force_target_from_env()
+{
+  const char* t = getenv("OJPH_FORCE_TARGET");
+  if (!t) return;
+  int64_t best = 0;
+  if (!strcmp(t, "sse4")) best = HWY_SSE4;
+  else if (!strcmp(t, "avx2")) best = HWY_AVX2;
+  else if (!strcmp(t, "avx3")) best = HWY_AVX3;
+  else if (!strcmp(t, "avx3_dl")) best = HWY_AVX3_DL;
+  else if (!strcmp(t, "avx3_spr")) best = HWY_AVX3_SPR;
+  else if (!strcmp(t, "emu128")) best = HWY_EMU128;
+  else if (!strcmp(t, "scalar")) best = HWY_SCALAR;
+  else { printf("unknown OJPH_FORCE_TARGET %s\n", t); exit(1); }
+  // disable everything better than the requested target
+  hwy::DisableTargets(best - 1);
+}
+#else
+static void force_target_from_env() {}
+#endif
+
 int main(int argc, char** argv)
 {
   const ojph::ui32 N = 4096;
+  force_target_from_env();
   int reps = argc > 1 ? atoi(argv[1]) : 50;
   int kernel = argc > 2 ? atoi(argv[2]) : 3;
   int zeros = argc > 3 ? atoi(argv[3]) : 0;

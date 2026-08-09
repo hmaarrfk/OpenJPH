@@ -1406,6 +1406,38 @@ namespace ojph {
     }
 
     /////////////////////////////////////////////////////////////////////////
+    // True when at least one of the SIMD targets compiled into this file
+    // is available at run time; ojph_codeblock_fun.cpp installs the
+    // encoder only in that case.  Mirrors hwy_tx_kernels_available() in
+    // ojph_codestream_hwy.cpp: hwy assumes its baseline target is
+    // supported without checking, so when the baseline needs more than
+    // the architecture guarantees (the MSVC static /arch:AVX2 build; GCC
+    // and clang keep the baseline at portable EMU128), verify it with
+    // our own CPU detection.
+    bool hwy_encoder_available()
+    {
+#if defined(OJPH_ARCH_X86_64) || defined(OJPH_ARCH_I386)
+  #if HWY_STATIC_TARGET <= HWY_AVX3
+      if (get_cpu_ext_level() < X86_CPU_EXT_LEVEL_AVX512)
+        return false;
+  #elif HWY_STATIC_TARGET <= HWY_AVX2
+      if (get_cpu_ext_level() < X86_CPU_EXT_LEVEL_AVX2FMA)
+        return false;
+  #elif HWY_STATIC_TARGET <= HWY_SSE4
+      if (get_cpu_ext_level() < X86_CPU_EXT_LEVEL_SSE42)
+        return false;
+  #endif
+#endif
+      const int64_t sup = hwy::SupportedTargets();
+      // SupportedTargets() re-initializes hwy's chosen dispatch target
+      // with the full detected set, counting on its caller to narrow it
+      // to the returned (possibly DisableTargets-masked) set; do so, or
+      // a preceding hwy::DisableTargets() would be ignored
+      hwy::GetChosenTarget().Update(sup);
+      return (sup & HWY_TARGETS & ~(HWY_EMU128 | HWY_SCALAR)) != 0;
+    }
+
+    /////////////////////////////////////////////////////////////////////////
     // dynamic dispatch: one entry in the table per compiled target; the
     // first call selects the best target the CPU supports
     HWY_EXPORT(hwy_encode_codeblock);
