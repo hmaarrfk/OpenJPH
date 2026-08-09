@@ -93,6 +93,7 @@ namespace ojph {
 
 #ifdef OJPH_ENABLE_HWY
     //////////////////////////////////////////////////////////////////////////
+    bool  hwy_encoder_available();
     bool  hwy_tx_kernels_available();
     bool  hwy_tx_kernels_use_avx3();
     ui32  find_max_val32(ui32* address);
@@ -155,10 +156,11 @@ namespace ojph {
       }
 
       #ifdef OJPH_ENABLE_HWY
-        // The Highway HT block encoder is written against fixed 256-bit
-        // vectors and stays statically compiled for AVX2, so it keeps
-        // its AVX2 run-time gate.
-        if (get_cpu_ext_level() >= X86_CPU_EXT_LEVEL_AVX2) {
+        // The block encoder is compiled once per x86 target and picks
+        // the best one at run time (hwy dynamic dispatch), so SSE4-class
+        // CPUs are enough to use it; MSVC builds it for a single static
+        // AVX2 target, which its predicate gates on AVX2.
+        if (hwy_encoder_available()) {
           encode_cb32 = ojph_encode_codeblock_simd;
           bool result = initialize_block_encoder_tables_simd();
           assert(result); ojph_unused(result);
