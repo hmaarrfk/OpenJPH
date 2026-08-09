@@ -456,14 +456,425 @@ namespace ojph {
     }
 
     //////////////////////////////////////////////////////////////////////////
+    //
+    //     Fused horizontal transforms for the rev53 kernel (WS)
+    //
+    //////////////////////////////////////////////////////////////////////////
+
+    //////////////////////////////////////////////////////////////////////////
+    // True when the kernel is the classic 5/3 kernel (the 5/3 update step
+    // then the 5/3 predict step), for which fused single-pass horizontal
+    // transforms are provided below.
+    static inline bool is_rev53_kernel(const param_atk* atk)
+    {
+      if (atk->get_num_steps() != 2)
+        return false;
+      const lifting_step* s0 = atk->get_step(0);
+      return s0->rev.Aatk == 1 && s0->rev.Batk == 2 && s0->rev.Eatk == 2 &&
+             is_53_predict_step(atk->get_step(1));
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    // returns [prev[L-1], v[0], ..., v[L-2]], i.e. v shifted up one lane
+    // with the last lane of prev shifted in
+    static inline hn::Vec<hn::ScalableTag<si32> >
+    hwy_shift_in_prev(hn::Vec<hn::ScalableTag<si32> > v,
+                      hn::Vec<hn::ScalableTag<si32> > prev)
+    {
+      const hn::ScalableTag<si32> d;
+#if HWY_TARGET == HWY_AVX2
+      // [prev[4..7], v[0..3]], then a per-block byte-wise combine
+      auto t = hn::ConcatLowerUpper(d, v, prev);
+      return hn::CombineShiftRightBytes<16 - sizeof(si32)>(d, v, t);
+#else
+      const size_t L = hn::Lanes(d);
+      auto last = hn::Set(d, hn::ExtractLane(prev, L - 1));
+      return hn::IfThenElse(hn::FirstN(d, 1), last, hn::Slide1Up(d, v));
+#endif
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    // Analysis: deinterleave the input and apply the 5/3 predict and
+    // update steps in a single pass; the update term H[i-1] is obtained
+    // by combining the previous block's H values with the current ones
+    // (lane 0 of the first block gets the boundary extension), so values
+    // are identical to the two-pass implementations.
+    static
+    void hwy_rev53_horz_ana32(const si32* sp, si32* lp, si32* hp,
+                              ui32 width, bool even)
+    {
+      const hn::ScalableTag<si32> d;
+      const ui32 L = (ui32)hn::Lanes(d);
+      const auto two = hn::Set(d, 2);
+      hn::Vec<hn::ScalableTag<si32> > e0, o0, e1, o1, prev;
+
+      if (even)
+      { // first sample is low-pass;
+        // H[i] = x[2i+1] - ((x[2i] + x[2i+2]) >> 1), then
+        // L[i] = x[2i] + ((H[i-1] + H[i] + 2) >> 2), with the constant
+        // extensions x[2i+2] -> x[width-2], H[-1] -> H[0], and
+        // H[h_width] -> H[h_width-1] at the boundaries
+        ui32 l_width = (width + 1) >> 1;
+        ui32 h_width = width >> 1;
+        ui32 safe = (width & 1) ? h_width : (h_width ? h_width - 1 : 0);
+        ui32 i = 0;
+        if (L <= safe)
+        { // first block; H[-1] = H[0], older lanes are H[k - 1]
+          hn::LoadInterleaved2(d, sp, e0, o0);
+          hn::LoadInterleaved2(d, sp + 2, e1, o1);
+          auto h = hn::Sub(o0, hn::ShiftRight<1>(hn::Add(e0, e1)));
+          auto hm1 =
+            hn::IfThenElse(hn::FirstN(d, 1), h, hn::Slide1Up(d, h));
+          auto l = hn::Add(e0,
+            hn::ShiftRight<2>(hn::Add(hn::Add(hm1, h), two)));
+          hn::StoreU(l, d, lp);
+          hn::StoreU(h, d, hp);
+          prev = h;
+          for (i = L; i + L <= safe; i += L)
+          {
+            hn::LoadInterleaved2(d, sp + 2 * i, e0, o0);
+            hn::LoadInterleaved2(d, sp + 2 * i + 2, e1, o1);
+            h = hn::Sub(o0, hn::ShiftRight<1>(hn::Add(e0, e1)));
+            hm1 = hwy_shift_in_prev(h, prev);
+            l = hn::Add(e0,
+              hn::ShiftRight<2>(hn::Add(hn::Add(hm1, h), two)));
+            hn::StoreU(l, d, lp + i);
+            hn::StoreU(h, d, hp + i);
+            prev = h;
+          }
+        }
+        for (; i < h_width; ++i)
+        {
+          si32 ev = sp[2 * i], od = sp[2 * i + 1];
+          si32 en = (i + 1 < l_width) ? sp[2 * i + 2] : sp[width - 2];
+          si32 h = od - ((ev + en) >> 1);
+          si32 hm1 = (i > 0) ? hp[i - 1] : h;
+          hp[i] = h;
+          lp[i] = ev + ((hm1 + h + 2) >> 2);
+        }
+        if (l_width > h_width)
+          lp[l_width - 1] =
+            sp[width - 1] + ((2 * hp[h_width - 1] + 2) >> 2);
+      }
+      else
+      { // first sample is high-pass;
+        // H[0] = x[0] - x[1], H[i] = x[2i] - ((x[2i-1] + x[2i+1]) >> 1),
+        // then L[i-1] = x[2i-1] + ((H[i-1] + H[i] + 2) >> 2), with the
+        // extensions x[2i+1] -> x[width-2] and H[h_width] -> H[h_width-1]
+        ui32 h_width = (width + 1) >> 1;
+        ui32 l_width = width >> 1;
+        hp[0] = sp[0] - sp[1];
+        ui32 safe = (width & 1) ? (h_width - 1) : h_width;
+        prev = hn::Set(d, hp[0]); // only its last lane is used
+        ui32 i = 1;
+        for (; i + L <= safe; i += L)
+        {
+          hn::LoadInterleaved2(d, sp + 2 * i - 1, e0, o0);
+          hn::LoadInterleaved2(d, sp + 2 * i + 1, e1, o1);
+          auto h = hn::Sub(o0, hn::ShiftRight<1>(hn::Add(e0, e1)));
+          auto hm1 = hwy_shift_in_prev(h, prev);
+          auto l = hn::Add(e0,
+            hn::ShiftRight<2>(hn::Add(hn::Add(hm1, h), two)));
+          hn::StoreU(l, d, lp + i - 1);
+          hn::StoreU(h, d, hp + i);
+          prev = h;
+        }
+        for (; i < h_width; ++i)
+        {
+          si32 l0 = sp[2 * i - 1];
+          si32 l1 = (i < l_width) ? sp[2 * i + 1] : sp[width - 2];
+          si32 h = sp[2 * i] - ((l0 + l1) >> 1);
+          hp[i] = h;
+          lp[i - 1] = l0 + ((hp[i - 1] + h + 2) >> 2);
+        }
+        if ((width & 1) == 0)
+          lp[l_width - 1] =
+            sp[width - 1] + ((2 * hp[h_width - 1] + 2) >> 2);
+      }
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    // Synthesis: apply the inverse 5/3 update and predict steps and
+    // interleave into the output in a single pass; the inverse of
+    // hwy_rev53_horz_ana32.  The updated low-pass values L' are
+    // recomputed where a lane needs its neighbour, so values are
+    // identical to the two-pass implementations.
+    static
+    void hwy_rev53_horz_syn32(si32* dp, const si32* lp, const si32* hp,
+                              ui32 width, bool even)
+    {
+      const hn::ScalableTag<si32> d;
+      const ui32 L = (ui32)hn::Lanes(d);
+      const auto two = hn::Set(d, 2);
+
+      if (even)
+      { // L'[i] = L[i] - ((H[i-1] + H[i] + 2) >> 2), then
+        // x[2i] = L'[i], x[2i+1] = H[i] + ((L'[i] + L'[i+1]) >> 1)
+        ui32 l_width = (width + 1) >> 1;
+        ui32 h_width = width >> 1;
+        ui32 i = 0;
+        if (h_width > 0)
+        {
+          for (; i + L + 1 <= h_width; i += L)
+          {
+            auto lv = hn::LoadU(d, lp + i);
+            auto hv = hn::LoadU(d, hp + i);
+            hn::Vec<hn::ScalableTag<si32> > hm1;
+            if (i == 0) // H[-1] = H[0]; older lanes are H[k - 1]
+              hm1 = hn::IfThenElse(hn::FirstN(d, 1), hv,
+                                   hn::Slide1Up(d, hv));
+            else
+              hm1 = hn::LoadU(d, hp + i - 1);
+            auto l0 = hn::Sub(lv,
+              hn::ShiftRight<2>(hn::Add(hn::Add(hm1, hv), two)));
+            // recompute L'[i+1 ..]
+            auto lv1 = hn::LoadU(d, lp + i + 1);
+            auto hv1 = hn::LoadU(d, hp + i + 1);
+            auto l1 = hn::Sub(lv1,
+              hn::ShiftRight<2>(hn::Add(hn::Add(hv, hv1), two)));
+            auto od = hn::Add(hv, hn::ShiftRight<1>(hn::Add(l0, l1)));
+            hn::StoreInterleaved2(l0, od, d, dp + 2 * i);
+          }
+          for (; i < h_width; ++i)
+          {
+            si32 hm1 = (i > 0) ? hp[i - 1] : hp[0];
+            si32 l0 = lp[i] - ((hm1 + hp[i] + 2) >> 2);
+            si32 l1;
+            if (i + 1 < l_width)
+            {
+              si32 h1 = (i + 1 < h_width) ? hp[i + 1] : hp[h_width - 1];
+              l1 = lp[i + 1] - ((hp[i] + h1 + 2) >> 2);
+            }
+            else
+              l1 = l0; // L'[l_width] -> L'[l_width-1]
+            dp[2 * i] = l0;
+            dp[2 * i + 1] = hp[i] + ((l0 + l1) >> 1);
+          }
+        }
+        if (l_width > h_width)
+          dp[width - 1] =
+            lp[l_width - 1] - ((2 * hp[h_width - 1] + 2) >> 2);
+      }
+      else
+      { // L'[i] = L[i] - ((H[i] + H[i+1] + 2) >> 2), then x[0] = H[0] +
+        // L'[0], x[2i-1] = L'[i-1], and
+        // x[2i] = H[i] + ((L'[i-1] + L'[i]) >> 1)
+        ui32 h_width = (width + 1) >> 1;
+        ui32 l_width = width >> 1;
+        // L'[j] with the extensions H[h_width] -> H[h_width-1] and
+        // L'[l_width] -> L'[l_width-1]
+        const si32 h_last = hp[h_width - 1];
+        si32 lpr0; // L'[0]
+        {
+          si32 h1 = (1 < h_width) ? hp[1] : h_last;
+          lpr0 = lp[0] - ((hp[0] + h1 + 2) >> 2);
+        }
+        dp[0] = hp[0] + lpr0;
+        ui32 i = 1;
+        for (; i + L + 1 <= h_width; i += L)
+        {
+          auto hv0 = hn::LoadU(d, hp + i - 1);
+          auto hv = hn::LoadU(d, hp + i);
+          auto hv1 = hn::LoadU(d, hp + i + 1);
+          auto lm1 = hn::Sub(hn::LoadU(d, lp + i - 1),
+            hn::ShiftRight<2>(hn::Add(hn::Add(hv0, hv), two)));
+          auto l0 = hn::Sub(hn::LoadU(d, lp + i),
+            hn::ShiftRight<2>(hn::Add(hn::Add(hv, hv1), two)));
+          auto ev = hn::Add(hv, hn::ShiftRight<1>(hn::Add(lm1, l0)));
+          hn::StoreInterleaved2(lm1, ev, d, dp + 2 * i - 1);
+        }
+        for (; i < h_width; ++i)
+        {
+          si32 lm1 = lp[i - 1] -
+            ((hp[i - 1] + hp[i] + 2) >> 2); // L'[i-1]; i - 1 < l_width
+          si32 l0;
+          if (i < l_width)
+          {
+            si32 h1 = (i + 1 < h_width) ? hp[i + 1] : h_last;
+            l0 = lp[i] - ((hp[i] + h1 + 2) >> 2);
+          }
+          else
+            l0 = lm1; // L'[l_width] -> L'[l_width-1]
+          dp[2 * i - 1] = lm1;
+          dp[2 * i] = hp[i] + ((lm1 + l0) >> 1);
+        }
+        if ((width & 1) == 0)
+          dp[width - 1] =
+            lp[l_width - 1] - ((hp[h_width - 1] + h_last + 2) >> 2);
+      }
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    //
+    //  Horizontal transforms for general whole-sample symmetric kernels
+    //  on 32-bit lines: one deinterleave/interleave pass and one pass per
+    //  lifting step, mirroring gen_rev_horz_ana32/gen_rev_horz_syn32
+    //
+    //////////////////////////////////////////////////////////////////////////
+
+    //////////////////////////////////////////////////////////////////////////
+    // One horizontal lifting pass; the two taps for dp[i] are sp[i - 1]
+    // and sp[i], and CASE/SUB are as in hwy_rev_vert_pass32.  The loop
+    // overruns count to whole vectors; the extension slots and the line
+    // padding absorb the overrun (as in the SSE2/AVX2 implementations).
+    template <int CASE, bool SUB>
+    static
+    void hwy_rev_horz_pass32(const si32* sp, si32* dp, ui32 count,
+                             si32 a, si32 b, ui8 e)
+    {
+      const hn::ScalableTag<si32> d;
+      const ui32 L = (ui32)hn::Lanes(d);
+      const auto va = hn::Set(d, a);
+      const auto vb = hn::Set(d, b);
+      for (ui32 i = 0; i < count; i += L)
+      {
+        auto s1 = hn::LoadU(d, sp + i - 1);
+        auto s2 = hn::LoadU(d, sp + i);
+        auto dv = hn::LoadU(d, dp + i);
+        auto t = hn::Add(s1, s2);
+        hn::Vec<hn::ScalableTag<si32> > w;
+        if (CASE == 0)      // 5/3 update and any case with a == 1
+          w = hn::ShiftRightSame(hn::Add(vb, t), e);
+        else if (CASE == 1) // 5/3 predict
+          w = hn::ShiftRight<1>(t);
+        else if (CASE == 2) // a == -1, but not 5/3 predict
+          w = hn::ShiftRightSame(hn::Sub(vb, t), e);
+        else                // general case
+          w = hn::ShiftRightSame(hn::Add(vb, hn::Mul(va, t)), e);
+        dv = SUB ? hn::Sub(dv, w) : hn::Add(dv, w);
+        hn::StoreU(dv, d, dp + i);
+      }
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    // Analysis; values identical to gen_rev_horz_ana32
+    static
+    void hwy_rev_horz_ws_ana32(const param_atk* atk, const line_buf* ldst,
+                               const line_buf* hdst, const line_buf* src,
+                               ui32 width, bool even)
+    {
+      const hn::ScalableTag<si32> d;
+      const ui32 L = (ui32)hn::Lanes(d);
+
+      // split src into ldst and hdst
+      {
+        si32* dpl = even ? ldst->i32 : hdst->i32;
+        si32* dph = even ? hdst->i32 : ldst->i32;
+        const si32* sp = src->i32;
+        hn::Vec<hn::ScalableTag<si32> > ev, od;
+        const ui32 half = (width + 1) >> 1;
+        for (ui32 i = 0; i < half; i += L)
+        {
+          hn::LoadInterleaved2(d, sp + 2 * i, ev, od);
+          hn::StoreU(ev, d, dpl + i);
+          hn::StoreU(od, d, dph + i);
+        }
+      }
+
+      si32* hp = hdst->i32, * lp = ldst->i32;
+      ui32 l_width = (width + (even ? 1 : 0)) >> 1;  // low pass
+      ui32 h_width = (width + (even ? 0 : 1)) >> 1;  // high pass
+      ui32 num_steps = atk->get_num_steps();
+      for (ui32 j = num_steps; j > 0; --j)
+      {
+        const lifting_step* s = atk->get_step(j - 1);
+        const si32 a = s->rev.Aatk;
+        const si32 b = s->rev.Batk;
+        const ui8 e = s->rev.Eatk;
+
+        // extension
+        lp[-1] = lp[0];
+        lp[l_width] = lp[l_width - 1];
+        // lifting step
+        const si32* sp = lp + (even ? 1 : 0);
+        if (a == 1)
+          hwy_rev_horz_pass32<0, false>(sp, hp, h_width, a, b, e);
+        else if (a == -1 && b == 1 && e == 1)
+          hwy_rev_horz_pass32<1, true>(sp, hp, h_width, a, b, e);
+        else if (a == -1)
+          hwy_rev_horz_pass32<2, false>(sp, hp, h_width, a, b, e);
+        else
+          hwy_rev_horz_pass32<3, false>(sp, hp, h_width, a, b, e);
+
+        // swap buffers
+        si32* t = lp; lp = hp; hp = t;
+        even = !even;
+        ui32 w = l_width; l_width = h_width; h_width = w;
+      }
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    // Synthesis; values identical to gen_rev_horz_syn32
+    static
+    void hwy_rev_horz_ws_syn32(const param_atk* atk, const line_buf* dst,
+                               const line_buf* lsrc, const line_buf* hsrc,
+                               ui32 width, bool even)
+    {
+      const hn::ScalableTag<si32> d;
+      const ui32 L = (ui32)hn::Lanes(d);
+
+      bool ev = even;
+      si32* oth = hsrc->i32, * aug = lsrc->i32;
+      ui32 aug_width = (width + (even ? 1 : 0)) >> 1;  // low pass
+      ui32 oth_width = (width + (even ? 0 : 1)) >> 1;  // high pass
+      ui32 num_steps = atk->get_num_steps();
+      for (ui32 j = 0; j < num_steps; ++j)
+      {
+        const lifting_step* s = atk->get_step(j);
+        const si32 a = s->rev.Aatk;
+        const si32 b = s->rev.Batk;
+        const ui8 e = s->rev.Eatk;
+
+        // extension
+        oth[-1] = oth[0];
+        oth[oth_width] = oth[oth_width - 1];
+        // lifting step
+        const si32* sp = oth + (ev ? 0 : 1);
+        if (a == 1)
+          hwy_rev_horz_pass32<0, true>(sp, aug, aug_width, a, b, e);
+        else if (a == -1 && b == 1 && e == 1)
+          hwy_rev_horz_pass32<1, false>(sp, aug, aug_width, a, b, e);
+        else if (a == -1)
+          hwy_rev_horz_pass32<2, true>(sp, aug, aug_width, a, b, e);
+        else
+          hwy_rev_horz_pass32<3, true>(sp, aug, aug_width, a, b, e);
+
+        // swap buffers
+        si32* t = aug; aug = oth; oth = t;
+        ev = !ev;
+        ui32 w = aug_width; aug_width = oth_width; oth_width = w;
+      }
+
+      // combine both lsrc and hsrc into dst
+      {
+        si32* dp = dst->i32;
+        const si32* spl = even ? lsrc->i32 : hsrc->i32;
+        const si32* sph = even ? hsrc->i32 : lsrc->i32;
+        const ui32 half = (width + 1) >> 1;
+        for (ui32 i = 0; i < half; i += L)
+        {
+          auto l = hn::LoadU(d, spl + i);
+          auto h = hn::LoadU(d, sph + i);
+          hn::StoreInterleaved2(l, h, d, dp + 2 * i);
+        }
+      }
+    }
+
+    //////////////////////////////////////////////////////////////////////////
     static
     void hwy_rev_horz_ana(const param_atk* atk, const line_buf* ldst,
                           const line_buf* hdst, const line_buf* src,
                           ui32 width, bool even)
     {
-      if (width > 1 && (src->flags & line_buf::LFT_32BIT) &&
-          is_rev13_kernel(atk))
-        hwy_rev13_horz_ana32(src->i32, ldst->i32, hdst->i32, width, even);
+      if (width > 1 && (src->flags & line_buf::LFT_32BIT))
+      {
+        if (is_rev13_kernel(atk))
+          hwy_rev13_horz_ana32(src->i32, ldst->i32, hdst->i32, width, even);
+        else if (is_rev53_kernel(atk))
+          hwy_rev53_horz_ana32(src->i32, ldst->i32, hdst->i32, width, even);
+        else
+          hwy_rev_horz_ws_ana32(atk, ldst, hdst, src, width, even);
+      }
       else
         fb_rev_horz_ana(atk, ldst, hdst, src, width, even);
     }
@@ -474,9 +885,15 @@ namespace ojph {
                           const line_buf* lsrc, const line_buf* hsrc,
                           ui32 width, bool even)
     {
-      if (width > 1 && (dst->flags & line_buf::LFT_32BIT) &&
-          is_rev13_kernel(atk))
-        hwy_rev13_horz_syn32(dst->i32, lsrc->i32, hsrc->i32, width, even);
+      if (width > 1 && (dst->flags & line_buf::LFT_32BIT))
+      {
+        if (is_rev13_kernel(atk))
+          hwy_rev13_horz_syn32(dst->i32, lsrc->i32, hsrc->i32, width, even);
+        else if (is_rev53_kernel(atk))
+          hwy_rev53_horz_syn32(dst->i32, lsrc->i32, hsrc->i32, width, even);
+        else
+          hwy_rev_horz_ws_syn32(atk, dst, lsrc, hsrc, width, even);
+      }
       else
         fb_rev_horz_syn(atk, dst, lsrc, hsrc, width, even);
     }
