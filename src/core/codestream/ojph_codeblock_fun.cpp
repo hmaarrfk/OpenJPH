@@ -156,11 +156,21 @@ namespace ojph {
       }
 
       #ifdef OJPH_ENABLE_HWY
+        // init() runs for every codeblock, and each predicate queries
+        // hwy::SupportedTargets(), which costs a few hundred cycles per
+        // call; evaluate them once (thread-safe magic statics).  Target
+        // forcing (hwy::DisableTargets) always precedes the first
+        // codestream operation, so a one-time decision is safe -- the
+        // same trade tile.cpp makes with its use_hwy static.
+        static const bool encoder_available = hwy_encoder_available();
+        static const bool tx_available = hwy_tx_kernels_available();
+        static const bool tx_use_avx3 = hwy_tx_kernels_use_avx3();
+
         // The block encoder is compiled once per x86 target and picks
         // the best one at run time (hwy dynamic dispatch), so SSE4-class
         // CPUs are enough to use it; MSVC builds it for a single static
         // AVX2 target, which its predicate gates on AVX2.
-        if (hwy_encoder_available()) {
+        if (encoder_available) {
           encode_cb32 = ojph_encode_codeblock_simd;
           bool result = initialize_block_encoder_tables_simd();
           assert(result); ojph_unused(result);
@@ -169,7 +179,7 @@ namespace ojph {
         // The Highway data-movement kernels dispatch at run time to the
         // best compiled-in target (SSE4, AVX2, AVX3, ...); install them
         // whenever any of those targets is available.
-        if (hwy_tx_kernels_available()) {
+        if (tx_available) {
           tx_from_cb16 = rev_tx_from_cb16;
           // the hwy tx_to_cb32 kernels accumulate max_val as a vector,
           // so pair them with the matching reduction (qualified, because
@@ -184,7 +194,7 @@ namespace ojph {
             // available (40.7 vs 63.3 ns/1024 on a Sapphire Rapids
             // Xeon w5-2445)
             if (get_cpu_ext_level() < X86_CPU_EXT_LEVEL_AVX2 ||
-                hwy_tx_kernels_use_avx3())
+                tx_use_avx3)
               tx_from_cb32 = rev_tx_from_cb32;
           }
           else {
