@@ -94,6 +94,7 @@ namespace ojph {
 #ifdef OJPH_ENABLE_HWY
     //////////////////////////////////////////////////////////////////////////
     bool  hwy_tx_kernels_available();
+    bool  hwy_tx_kernels_use_avx3();
     ui32  find_max_val32(ui32* address);
     void  rev_tx_from_cb16(const ui32 *sp, si16 *dp, ui32 K_max,
                                ui32 count);
@@ -174,10 +175,14 @@ namespace ojph {
           find_max_val32 = local::find_max_val32;
           if (reversible) {
             tx_to_cb32 = rev_tx_to_cb32;
-            // the hand-written avx2_rev_tx_from_cb32 survivor measured
-            // faster and keeps AVX2-capable CPUs; the hwy kernel covers
-            // the SSE4-class CPUs below it
-            if (get_cpu_ext_level() < X86_CPU_EXT_LEVEL_AVX2)
+            // the hand-written avx2_rev_tx_from_cb32 survivor keeps a
+            // small edge on AVX2-class CPUs (43.0 vs 43.7 ns/1024 on a
+            // Core Ultra 7 270K); the hwy kernel covers the SSE4-class
+            // CPUs below it and wins clearly once an AVX-512 target is
+            // available (40.7 vs 63.3 ns/1024 on a Sapphire Rapids
+            // Xeon w5-2445)
+            if (get_cpu_ext_level() < X86_CPU_EXT_LEVEL_AVX2 ||
+                hwy_tx_kernels_use_avx3())
               tx_from_cb32 = rev_tx_from_cb32;
           }
           else {

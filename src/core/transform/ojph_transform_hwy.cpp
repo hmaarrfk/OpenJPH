@@ -1177,6 +1177,11 @@ namespace ojph {
     }
 
     //////////////////////////////////////////////////////////////////////////
+    // True when the hwy vertical step should be preferred over the
+    // fallback; set at install time (see install_rev_transforms)
+    static bool hwy_vert_step_wins = false;
+
+    //////////////////////////////////////////////////////////////////////////
     static
     void simd_rev_vert_step(const lifting_step* s, const line_buf* sig,
                            const line_buf* other, const line_buf* aug,
@@ -1185,11 +1190,12 @@ namespace ojph {
       if (is_null_step(s))
         return; // the step changes nothing; rev13 update steps are such
 
-      // Measurements show the hand-written SIMD vertical steps (SSE2/AVX2)
-      // are slightly faster than the Highway loop of the same width; use
-      // the Highway loop only when the generic implementation would run
-      // otherwise.
-      if (fb_rev_vert_step != gen_rev_vert_step)
+      // At AVX2 the hand-written SIMD vertical steps (SSE2/AVX2) measured
+      // slightly faster than the Highway loop of the same width, so the
+      // Highway loop runs only when the generic implementation would run
+      // otherwise; at AVX-512 class targets the Highway loop is well
+      // ahead (see install_rev_transforms) and is preferred.
+      if (!hwy_vert_step_wins && fb_rev_vert_step != gen_rev_vert_step)
       {
         fb_rev_vert_step(s, sig, other, aug, repeat, synthesis);
         return;
@@ -1362,24 +1368,24 @@ namespace ojph {
     }
 
     //////////////////////////////////////////////////////////////////////////
-    // True when at least one of the SIMD targets compiled into this file
-    // is available at run time.  hwy assumes its baseline target is
+    // The SIMD targets compiled into this file that are available at run
+    // time (0 when none is).  hwy assumes its baseline target is
     // supported without checking, so when the baseline needs more than
     // the architecture guarantees (an MSVC /arch:AVX2 build; the GCC and
     // clang builds keep the baseline at portable EMU128), verify it with
     // our own CPU detection.
-    static inline bool hwy_target_available()
+    static inline int64_t hwy_simd_targets()
     {
 #if defined(OJPH_ARCH_X86_64) || defined(OJPH_ARCH_I386)
   #if HWY_STATIC_TARGET <= HWY_AVX3
       if (get_cpu_ext_level() < X86_CPU_EXT_LEVEL_AVX512)
-        return false;
+        return 0;
   #elif HWY_STATIC_TARGET <= HWY_AVX2
       if (get_cpu_ext_level() < X86_CPU_EXT_LEVEL_AVX2FMA)
-        return false;
+        return 0;
   #elif HWY_STATIC_TARGET <= HWY_SSE4
       if (get_cpu_ext_level() < X86_CPU_EXT_LEVEL_SSE42)
-        return false;
+        return 0;
   #endif
 #endif
       const int64_t sup = hwy::SupportedTargets();
@@ -1388,13 +1394,13 @@ namespace ojph {
       // to the returned (possibly DisableTargets-masked) set; do so, or
       // a preceding hwy::DisableTargets() would be ignored
       hwy::GetChosenTarget().Update(sup);
-      return (sup & HWY_TARGETS & ~(HWY_EMU128 | HWY_SCALAR)) != 0;
+      return sup & HWY_TARGETS & ~(HWY_EMU128 | HWY_SCALAR);
     }
 
     //////////////////////////////////////////////////////////////////////////
     void install_irv_transforms()
     {
-      if (!hwy_target_available())
+      if (hwy_simd_targets() == 0)
         return;
       irv_vert_step    = simd_irv_vert_step;
       irv_vert_times_K = simd_irv_vert_times_K;
@@ -1405,8 +1411,17 @@ namespace ojph {
     //////////////////////////////////////////////////////////////////////////
     void install_rev_transforms()
     {
-      if (!hwy_target_available())
+      const int64_t simd = hwy_simd_targets();
+      if (simd == 0)
         return;
+      // dispatch resolves to the best target (smaller bit values are
+      // newer); at AVX-512 class targets the hwy vertical step measured
+      // well ahead of the hand-written AVX2 survivor (176 vs 303
+      // ns/4096-sample step on a Sapphire Rapids Xeon w5-2445), while at
+      // AVX2 the survivor keeps a small edge
+      const int64_t best = simd & (-simd);
+      hwy_vert_step_wins = best <= HWY_AVX3;
+
       fb_rev_vert_step         = rev_vert_step;
       fb_rev_horz_ana          = rev_horz_ana;
       fb_rev_horz_syn          = rev_horz_syn;
