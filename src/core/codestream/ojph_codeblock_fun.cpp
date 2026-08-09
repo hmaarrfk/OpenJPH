@@ -93,6 +93,7 @@ namespace ojph {
 
 #ifdef OJPH_ENABLE_HWY
     //////////////////////////////////////////////////////////////////////////
+    bool  hwy_tx_kernels_available();
     ui32  find_max_val32(ui32* address);
     void  rev_tx_from_cb16(const ui32 *sp, si16 *dp, ui32 K_max,
                                ui32 count);
@@ -153,21 +154,32 @@ namespace ojph {
       }
 
       #ifdef OJPH_ENABLE_HWY
-        // Google Highway kernels; statically dispatched to the best
-        // target enabled at compile time (AVX2), so they are gated on
-        // the same run-time CPU level.
+        // The Highway HT block encoder is written against fixed 256-bit
+        // vectors and stays statically compiled for AVX2, so it keeps
+        // its AVX2 run-time gate.
         if (get_cpu_ext_level() >= X86_CPU_EXT_LEVEL_AVX2) {
           encode_cb32 = ojph_encode_codeblock_simd;
           bool result = initialize_block_encoder_tables_simd();
           assert(result); ojph_unused(result);
+        }
 
+        // The Highway data-movement kernels dispatch at run time to the
+        // best compiled-in target (SSE4, AVX2, AVX3, ...); install them
+        // whenever any of those targets is available.
+        if (hwy_tx_kernels_available()) {
           tx_from_cb16 = rev_tx_from_cb16;
           // the hwy tx_to_cb32 kernels accumulate max_val as a vector,
           // so pair them with the matching reduction (qualified, because
           // the member of the same name shadows the free function here)
           find_max_val32 = local::find_max_val32;
-          if (reversible)
+          if (reversible) {
             tx_to_cb32 = rev_tx_to_cb32;
+            // the hand-written avx2_rev_tx_from_cb32 survivor measured
+            // faster and keeps AVX2-capable CPUs; the hwy kernel covers
+            // the SSE4-class CPUs below it
+            if (get_cpu_ext_level() < X86_CPU_EXT_LEVEL_AVX2)
+              tx_from_cb32 = rev_tx_from_cb32;
+          }
           else {
             tx_to_cb32 = irv_tx_to_cb32;
             tx_from_cb32 = irv_tx_from_cb32;

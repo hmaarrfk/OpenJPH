@@ -33,22 +33,29 @@
 // File: ojph_codestream_hwy.cpp
 //***************************************************************************/
 
-// Decode-side data-movement kernels written with Google Highway (libhwy).
-// The file is compiled once for the best statically selected target (the
-// build adds the target flags, e.g. -mavx2); the caller must gate calls
-// on a matching run-time CPU check (see ojph_codeblock_fun.cpp).
+// Data-movement kernels written with Google Highway (libhwy).  The file
+// is compiled once per Highway target (SSE4, AVX2, AVX3, ...) through
+// foreach_target.h, and every public function dispatches to the best
+// target the CPU supports at run time; the caller must still gate calls
+// on hwy_tx_kernels_available() (see ojph_codeblock_fun.cpp), which
+// verifies that at least one of the compiled SIMD targets is available.
+
+#undef HWY_TARGET_INCLUDE
+#define HWY_TARGET_INCLUDE "codestream/ojph_codestream_hwy.cpp"
+#include <hwy/foreach_target.h>
+#include <hwy/highway.h>
 
 #include "ojph_defs.h"
 #include "ojph_arch.h"
 
 #if defined(OJPH_ENABLE_HWY)
 
-#include <hwy/highway.h>
-
-namespace hn = hwy::HWY_NAMESPACE;
-
+HWY_BEFORE_NAMESPACE();
 namespace ojph {
   namespace local {
+    namespace HWY_NAMESPACE {
+
+    namespace hn = hwy::HWY_NAMESPACE;
 
     //////////////////////////////////////////////////////////////////////////
     // sign-magnitude ui32 codeblock samples to a 16-bit line; the hwy
@@ -87,10 +94,10 @@ namespace ojph {
 
     //////////////////////////////////////////////////////////////////////////
     // sign-magnitude ui32 codeblock samples to a 32-bit line; the hwy
-    // equivalent of gen_rev_tx_from_cb32.  Not dispatched: it measured
-    // slightly slower than the hand-written avx2_rev_tx_from_cb32, which
-    // rounds count up to whole vectors instead of running a scalar tail;
-    // kept for non-AVX2 targets and future re-evaluation
+    // equivalent of gen_rev_tx_from_cb32.  At AVX2 the hand-written
+    // avx2_rev_tx_from_cb32, which rounds count up to whole vectors
+    // instead of running a scalar tail, measured slightly faster and is
+    // dispatched instead; this serves the other targets
     void rev_tx_from_cb32(const ui32 *sp, void *dp, ui32 K_max,
                               float delta, ui32 count)
     {
@@ -117,22 +124,10 @@ namespace ojph {
     }
 
     //////////////////////////////////////////////////////////////////////////
-    // or-reduce the 8-entry max_val accumulator kept by the tx_to_cb32
-    // kernels below (the generic kernels use entry 0 only, so this works
-    // for them too); called once per codeblock
-    ui32 find_max_val32(ui32* address)
-    {
-      ui32 t = address[0];
-      for (int i = 1; i < 8; ++i)
-        t |= address[i];
-      return t;
-    }
-
-    //////////////////////////////////////////////////////////////////////////
     // fold a vector or-accumulator into the caller's max_val array; the
     // array holds 8 ui32 (see codeblock::max_val32), which matches the
-    // AVX2 vector width this file is compiled for; other widths fold to
-    // a scalar in element 0, which every find_max_val32 handles too
+    // AVX2 vector width; other widths fold entry-wise into the first
+    // min(N, 8) entries, which every find_max_val32 handles too
     static inline
     void fold_max_val(hn::Vec<hn::ScalableTag<si32> > tmax,
                           ui32 *max_val)
@@ -148,10 +143,8 @@ namespace ojph {
       {
         HWY_ALIGN si32 tmp[HWY_MAX_LANES_D(hn::ScalableTag<si32>)];
         hn::Store(tmax, d, tmp);
-        ui32 t = 0;
         for (size_t i = 0; i < N; ++i)
-          t |= (ui32)tmp[i];
-        max_val[0] |= t;
+          max_val[i & 7] |= (ui32)tmp[i];
       }
     }
 
@@ -282,7 +275,108 @@ namespace ojph {
         dp[i] = (si32)sp[i] + shift;
     }
 
+    } // !HWY_NAMESPACE
   }
 }
+HWY_AFTER_NAMESPACE();
+
+#if HWY_ONCE
+
+namespace ojph {
+  namespace local {
+
+    HWY_EXPORT(rev_tx_from_cb16);
+    HWY_EXPORT(rev_tx_from_cb32);
+    HWY_EXPORT(rev_tx_to_cb32);
+    HWY_EXPORT(irv_tx_to_cb32);
+    HWY_EXPORT(irv_tx_from_cb32);
+    HWY_EXPORT(rev_convert16);
+
+    //////////////////////////////////////////////////////////////////////////
+    // True when at least one of the SIMD targets compiled into this file
+    // is available at run time; the dispatch sites install the functions
+    // below only in that case.  hwy assumes its baseline target is
+    // supported without checking, so when the baseline needs more than
+    // the architecture guarantees (an MSVC /arch:AVX2 build; the GCC and
+    // clang builds keep the baseline at portable EMU128), verify it with
+    // our own CPU detection.
+    bool hwy_tx_kernels_available()
+    {
+#if defined(OJPH_ARCH_X86_64) || defined(OJPH_ARCH_I386)
+  #if HWY_STATIC_TARGET <= HWY_AVX3
+      if (get_cpu_ext_level() < X86_CPU_EXT_LEVEL_AVX512)
+        return false;
+  #elif HWY_STATIC_TARGET <= HWY_AVX2
+      if (get_cpu_ext_level() < X86_CPU_EXT_LEVEL_AVX2FMA)
+        return false;
+  #elif HWY_STATIC_TARGET <= HWY_SSE4
+      if (get_cpu_ext_level() < X86_CPU_EXT_LEVEL_SSE42)
+        return false;
+  #endif
+#endif
+      const int64_t simd = hwy::SupportedTargets() & HWY_TARGETS &
+                           ~(HWY_EMU128 | HWY_SCALAR);
+      return simd != 0;
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    // or-reduce the 8-entry max_val accumulator kept by the tx_to_cb32
+    // kernels above (the generic kernels use entry 0 only, so this works
+    // for them too); called once per codeblock
+    ui32 find_max_val32(ui32* address)
+    {
+      ui32 t = address[0];
+      for (int i = 1; i < 8; ++i)
+        t |= address[i];
+      return t;
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    void rev_tx_from_cb16(const ui32 *sp, si16 *dp, ui32 K_max,
+                              ui32 count)
+    {
+      HWY_DYNAMIC_DISPATCH(rev_tx_from_cb16)(sp, dp, K_max, count);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    void rev_tx_from_cb32(const ui32 *sp, void *dp, ui32 K_max,
+                              float delta, ui32 count)
+    {
+      HWY_DYNAMIC_DISPATCH(rev_tx_from_cb32)(sp, dp, K_max, delta, count);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    void rev_tx_to_cb32(const void *sp, ui32 *dp, ui32 K_max,
+                            float delta_inv, ui32 count, ui32* max_val)
+    {
+      HWY_DYNAMIC_DISPATCH(rev_tx_to_cb32)(sp, dp, K_max, delta_inv,
+                                           count, max_val);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    void irv_tx_to_cb32(const void *sp, ui32 *dp, ui32 K_max,
+                            float delta_inv, ui32 count, ui32* max_val)
+    {
+      HWY_DYNAMIC_DISPATCH(irv_tx_to_cb32)(sp, dp, K_max, delta_inv,
+                                           count, max_val);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    void irv_tx_from_cb32(const ui32 *sp, void *dp, ui32 K_max,
+                              float delta, ui32 count)
+    {
+      HWY_DYNAMIC_DISPATCH(irv_tx_from_cb32)(sp, dp, K_max, delta, count);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    void rev_convert16(const si16 *sp, si32 *dp, si32 shift, ui32 count)
+    {
+      HWY_DYNAMIC_DISPATCH(rev_convert16)(sp, dp, shift, count);
+    }
+
+  }
+}
+
+#endif // HWY_ONCE
 
 #endif // OJPH_ENABLE_HWY
