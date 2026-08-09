@@ -35,13 +35,17 @@
 
 // Google Highway implementations of the colour transforms (RCT and
 // ICT) and the rev_convert line conversion.  Like
-// ojph_transform_hwy.cpp, this translation unit is compiled
-// for a single (static) Highway target and installed only when the CPU
-// supports it; it is compiled with -ffp-contract=off, so the float
-// (ICT) results are identical to the generic implementation.
+// ojph_transform_hwy.cpp, this translation unit is compiled once per
+// Highway target (SSE4, AVX2, AVX3, ...) through foreach_target.h and
+// dispatches to the best target the CPU supports at run time; it is
+// compiled with -ffp-contract=off, so the float (ICT) results are
+// identical to the generic implementation.
 
 // Highway must be included before any ojph header, because ojph_defs.h
 // renames the ojph namespace token.
+#undef HWY_TARGET_INCLUDE
+#define HWY_TARGET_INCLUDE "transform/ojph_colour_hwy.cpp"
+#include <hwy/foreach_target.h>
 #include <hwy/highway.h>
 
 #include "ojph_arch.h"
@@ -55,17 +59,18 @@
 #include "ojph_colour.h"
 #include "ojph_colour_local.h"
 
-namespace hn = hwy::HWY_NAMESPACE;
-
+HWY_BEFORE_NAMESPACE();
 namespace ojph {
   namespace local {
+    namespace HWY_NAMESPACE {
+
+    namespace hn = hwy::HWY_NAMESPACE;
 
     //////////////////////////////////////////////////////////////////////////
     // add a shift while copying a line, converting between 32- and
     // 64-bit integers as needed; values identical to gen_rev_convert.
     // This is the hot per-line output conversion of tile::pull for
     // components with 32-bit lines.
-    static
     void simd_rev_convert(
       const line_buf *src_line, const ui32 src_line_offset,
       line_buf *dst_line, const ui32 dst_line_offset,
@@ -124,7 +129,6 @@ namespace ojph {
     // loops in this file, the loops overrun the line ends by less than
     // one vector; the lines are padded (the SSE2/AVX2 implementations
     // rely on the same).
-    static
     void simd_rct_forward(
       const line_buf *r, const line_buf *g, const line_buf *b,
       line_buf *y, line_buf *cb, line_buf *cr, ui32 repeat)
@@ -198,7 +202,6 @@ namespace ojph {
 
     //////////////////////////////////////////////////////////////////////////
     // Backward RCT; values identical to gen_rct_backward
-    static
     void simd_rct_backward(
       const line_buf *y, const line_buf *cb, const line_buf *cr,
       line_buf *r, line_buf *g, line_buf *b, ui32 repeat)
@@ -273,7 +276,6 @@ namespace ojph {
     //////////////////////////////////////////////////////////////////////////
     // Forward ICT; values identical to gen_ict_forward (no fma; see the
     // note at the top of the file)
-    static
     void simd_ict_forward(const float *r, const float *g, const float *b,
                          float *y, float *cb, float *cr, ui32 repeat)
     {
@@ -300,7 +302,6 @@ namespace ojph {
 
     //////////////////////////////////////////////////////////////////////////
     // Backward ICT; values identical to gen_ict_backward
-    static
     void simd_ict_backward(const float *y, const float *cb, const float *cr,
                           float *r, float *g, float *b, ui32 repeat)
     {
@@ -322,12 +323,78 @@ namespace ojph {
       }
     }
 
+    } // !HWY_NAMESPACE namespace
+  } // !local namespace
+} // !ojph namespace
+HWY_AFTER_NAMESPACE();
+
+#if HWY_ONCE
+
+namespace ojph {
+  namespace local {
+
+    HWY_EXPORT(simd_rev_convert);
+    HWY_EXPORT(simd_rct_forward);
+    HWY_EXPORT(simd_rct_backward);
+    HWY_EXPORT(simd_ict_forward);
+    HWY_EXPORT(simd_ict_backward);
+
+    //////////////////////////////////////////////////////////////////////////
+    static
+    void simd_rev_convert(
+      const line_buf *src_line, const ui32 src_line_offset,
+      line_buf *dst_line, const ui32 dst_line_offset,
+      si64 shift, ui32 width)
+    {
+      HWY_DYNAMIC_DISPATCH(simd_rev_convert)(src_line, src_line_offset,
+        dst_line, dst_line_offset, shift, width);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    static
+    void simd_rct_forward(
+      const line_buf *r, const line_buf *g, const line_buf *b,
+      line_buf *y, line_buf *cb, line_buf *cr, ui32 repeat)
+    {
+      HWY_DYNAMIC_DISPATCH(simd_rct_forward)(r, g, b, y, cb, cr, repeat);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    static
+    void simd_rct_backward(
+      const line_buf *y, const line_buf *cb, const line_buf *cr,
+      line_buf *r, line_buf *g, line_buf *b, ui32 repeat)
+    {
+      HWY_DYNAMIC_DISPATCH(simd_rct_backward)(y, cb, cr, r, g, b, repeat);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    static
+    void simd_ict_forward(const float *r, const float *g, const float *b,
+                         float *y, float *cb, float *cr, ui32 repeat)
+    {
+      HWY_DYNAMIC_DISPATCH(simd_ict_forward)(r, g, b, y, cb, cr, repeat);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    static
+    void simd_ict_backward(const float *y, const float *cb, const float *cr,
+                          float *r, float *g, float *b, ui32 repeat)
+    {
+      HWY_DYNAMIC_DISPATCH(simd_ict_backward)(y, cb, cr, r, g, b, repeat);
+    }
+
     //////////////////////////////////////////////////////////////////////////
     void install_colour_transforms()
     {
 #if defined(OJPH_ARCH_X86_64) || defined(OJPH_ARCH_I386)
-      // this file is compiled for a fixed Highway target; install only
-      // when the CPU supports it (targets are bitflags; smaller is newer)
+      // dispatch resolves to the best compiled-in target the CPU
+      // supports; install only when one of the SIMD targets is
+      // available.  hwy assumes its baseline target is supported
+      // without checking, so when the baseline needs more than the
+      // architecture guarantees (an MSVC /arch:AVX2 build; the GCC and
+      // clang builds keep the baseline at portable EMU128), verify it
+      // with our own CPU detection.
   #if HWY_STATIC_TARGET <= HWY_AVX3
       if (get_cpu_ext_level() < X86_CPU_EXT_LEVEL_AVX512)
         return;
@@ -339,6 +406,10 @@ namespace ojph {
         return;
   #endif
 #endif
+      const int64_t simd = hwy::SupportedTargets() & HWY_TARGETS &
+                           ~(HWY_EMU128 | HWY_SCALAR);
+      if (simd == 0)
+        return;
       rev_convert  = simd_rev_convert;
       rct_forward  = simd_rct_forward;
       rct_backward = simd_rct_backward;
@@ -348,5 +419,7 @@ namespace ojph {
 
   } // !local namespace
 } // !ojph namespace
+
+#endif // HWY_ONCE
 
 #endif // OJPH_ENABLE_HWY

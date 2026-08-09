@@ -130,6 +130,9 @@ add_library(ojph ${SOURCES})
 if (OJPH_USE_HWY)
   target_compile_definitions(ojph PRIVATE OJPH_ENABLE_HWY)
   target_include_directories(ojph PRIVATE ${OJPH_HWY_INCLUDE_DIR})
+  # foreach_target.h re-includes the hwy translation units by the path
+  # set in HWY_TARGET_INCLUDE, which is relative to this directory
+  target_include_directories(ojph PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   if (OJPH_HWY_LIBRARY)
     target_link_libraries(ojph PRIVATE ${OJPH_HWY_LIBRARY})
   endif()
