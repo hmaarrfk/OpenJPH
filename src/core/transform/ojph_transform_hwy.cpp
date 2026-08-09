@@ -34,10 +34,11 @@
 //***************************************************************************/
 
 // Google Highway implementations of the reversible DWT functions.  This
-// translation unit is compiled for a single (static) Highway target,
-// selected at compile time from the compiler flags the build system sets
-// for it (see src/core/CMakeLists.txt); install_rev_transforms()
-// installs the functions only when the CPU supports that target.
+// translation unit is compiled once per Highway target (SSE4, AVX2,
+// AVX3, ...) through foreach_target.h, and every installed function
+// dispatches to the best target the CPU supports at run time;
+// install_rev_transforms() installs the functions only when one of the
+// compiled SIMD targets is available.
 //
 // The functions here compute values identical to those of the generic
 // (and SSE2/AVX2) implementations; codestreams they produce are
@@ -47,6 +48,9 @@
 
 // Highway must be included before any ojph header, because ojph_defs.h
 // renames the ojph namespace token.
+#undef HWY_TARGET_INCLUDE
+#define HWY_TARGET_INCLUDE "transform/ojph_transform_hwy.cpp"
+#include <hwy/foreach_target.h>
 #include <hwy/highway.h>
 
 #include "ojph_arch.h"
@@ -63,72 +67,12 @@
 #include "ojph_transform.h"
 #include "ojph_transform_local.h"
 
-namespace hn = hwy::HWY_NAMESPACE;
-
+HWY_BEFORE_NAMESPACE();
 namespace ojph {
   namespace local {
+    namespace HWY_NAMESPACE {
 
-    //////////////////////////////////////////////////////////////////////////
-    // The functions selected before Highway installation; used for the
-    // cases the Highway implementations do not handle.
-    static void (*fb_rev_vert_step)
-      (const lifting_step* s, const line_buf* sig, const line_buf* other,
-        const line_buf* aug, ui32 repeat, bool synthesis) = NULL;
-    static void (*fb_rev_horz_ana)
-      (const param_atk* atk, const line_buf* ldst, const line_buf* hdst,
-        const line_buf* src, ui32 width, bool even) = NULL;
-    static void (*fb_rev_horz_syn)
-      (const param_atk* atk, const line_buf* dst, const line_buf* lsrc,
-        const line_buf* hsrc, ui32 width, bool even) = NULL;
-    static void (*fb_rev_vert_step_one_tap)
-      (const lifting_step* s, const line_buf* src, const line_buf* aug,
-        ui32 repeat, bool synthesis) = NULL;
-    static void (*fb_rev_horz_ana_arb)
-      (const param_atk* atk, const line_buf* ldst, const line_buf* hdst,
-        const line_buf* src, ui32 width, bool even) = NULL;
-    static void (*fb_rev_horz_syn_arb)
-      (const param_atk* atk, const line_buf* dst, const line_buf* lsrc,
-        const line_buf* hsrc, ui32 width, bool even) = NULL;
-
-    //////////////////////////////////////////////////////////////////////////
-    // True when the lifting step is a no-op; it adds
-    // (Batk + Aatk * x) >> Eatk, which is identically zero when Aatk == 0
-    // and Batk >> Eatk == 0.
-    static inline bool is_null_step(const lifting_step* s)
-    {
-      return s->rev.Aatk == 0 && (s->rev.Batk >> s->rev.Eatk) == 0;
-    }
-
-    //////////////////////////////////////////////////////////////////////////
-    // True when the kernel is the 5/3 predict step (see the generic
-    // implementations in ojph_transform.cpp).
-    static inline bool is_53_predict_step(const lifting_step* s)
-    {
-      return s->rev.Aatk == -1 && s->rev.Batk == 1 && s->rev.Eatk == 1;
-    }
-
-    //////////////////////////////////////////////////////////////////////////
-    // True when the kernel is the two-step previous-sample predict-only
-    // kernel; same as is_fused_prev_sample_kernel in ojph_transform.cpp.
-    static inline bool is_prev_sample_kernel(const param_atk* atk)
-    {
-      if (atk->get_num_steps() != 2)
-        return false;
-      const lifting_step* s1 = atk->get_step(1);
-      return is_null_step(atk->get_step(0)) &&
-             s1->rev.Aatk == -1 && s1->rev.Batk == 0 && s1->rev.Eatk == 0 &&
-             s1->rev.Oatk == 0;
-    }
-
-    //////////////////////////////////////////////////////////////////////////
-    // True when the kernel is the rev13 kernel (a null update step then
-    // the 5/3 predict step), for which fused single-pass horizontal
-    // transforms are provided below.
-    static inline bool is_rev13_kernel(const param_atk* atk)
-    {
-      return atk->get_num_steps() == 2 && is_null_step(atk->get_step(0)) &&
-             is_53_predict_step(atk->get_step(1));
-    }
+    namespace hn = hwy::HWY_NAMESPACE;
 
     //////////////////////////////////////////////////////////////////////////
     //
@@ -157,9 +101,9 @@ namespace ojph {
       // and aligned (the SSE2/AVX2 implementations rely on the same)
       for (ui32 i = 0; i < repeat; i += L)
       {
-        auto s1 = hn::Load(d, src1 + i);
-        auto s2 = hn::Load(d, src2 + i);
-        auto dv = hn::Load(d, dst + i);
+        auto s1 = hn::LoadU(d, src1 + i);
+        auto s2 = hn::LoadU(d, src2 + i);
+        auto dv = hn::LoadU(d, dst + i);
         auto t = hn::Add(s1, s2);
         hn::Vec<hn::ScalableTag<si32> > w;
         if (CASE == 0)      // 5/3 update and any case with a == 1
@@ -178,7 +122,6 @@ namespace ojph {
     //////////////////////////////////////////////////////////////////////////
     // One vertical lifting step of a whole-sample symmetric kernel on
     // 32-bit lines; the cases mirror those of gen_rev_vert_step32.
-    static
     void rev_vert_step32(const lifting_step* s, const si32* src1,
                              const si32* src2, si32* dst, ui32 repeat,
                              bool synthesis)
@@ -214,44 +157,11 @@ namespace ojph {
     }
 
     //////////////////////////////////////////////////////////////////////////
-    static
-    void simd_rev_vert_step(const lifting_step* s, const line_buf* sig,
-                           const line_buf* other, const line_buf* aug,
-                           ui32 repeat, bool synthesis)
-    {
-      if (is_null_step(s))
-        return; // the step changes nothing; rev13 update steps are such
-
-      // Measurements show the hand-written SIMD vertical steps (SSE2/AVX2)
-      // are slightly faster than the Highway loop of the same width; use
-      // the Highway loop only when the generic implementation would run
-      // otherwise.
-      if (fb_rev_vert_step != gen_rev_vert_step)
-      {
-        fb_rev_vert_step(s, sig, other, aug, repeat, synthesis);
-        return;
-      }
-
-      if (((sig != NULL) && (sig->flags & line_buf::LFT_32BIT)) ||
-          ((aug != NULL) && (aug->flags & line_buf::LFT_32BIT)) ||
-          ((other != NULL) && (other->flags & line_buf::LFT_32BIT)))
-      {
-        assert((sig == NULL || sig->flags & line_buf::LFT_32BIT) &&
-               (other == NULL || other->flags & line_buf::LFT_32BIT) &&
-               (aug == NULL || aug->flags & line_buf::LFT_32BIT));
-        rev_vert_step32(s, sig->i32, other->i32, aug->i32, repeat,
-                            synthesis);
-      }
-      else
-        fb_rev_vert_step(s, sig, other, aug, repeat, synthesis);
-    }
-
-    //////////////////////////////////////////////////////////////////////////
     // One vertical lifting step of an arbitrary kernel with a single
     // lifting coefficient; the cases mirror gen_rev_vert_step_one_tap_T.
     // Only the cases whose scalar arithmetic is performed in the lane type
-    // are implemented; the rest are forwarded, so that results stay
-    // identical to the generic implementation.
+    // are implemented; the rest are forwarded (return false), so that
+    // results stay identical to the generic implementation.
     template <typename T>
     static
     bool rev_vert_step_one_tap_T(const lifting_step* s, const T* sp,
@@ -295,26 +205,17 @@ namespace ojph {
     }
 
     //////////////////////////////////////////////////////////////////////////
-    static
-    void simd_rev_vert_step_one_tap(const lifting_step* s,
-                                   const line_buf* src, const line_buf* aug,
-                                   ui32 repeat, bool synthesis)
+    bool rev_vert_one_tap16(const lifting_step* s, const si16* sp,
+                                si16* dst, ui32 repeat, bool synthesis)
     {
-      bool done = false;
-      if (aug->flags & line_buf::LFT_16BIT)
-      {
-        assert(src == NULL || src->flags & line_buf::LFT_16BIT);
-        done = rev_vert_step_one_tap_T<si16>(s, src->i16, aug->i16,
-                                                 repeat, synthesis);
-      }
-      else if (aug->flags & line_buf::LFT_32BIT)
-      {
-        assert(src == NULL || src->flags & line_buf::LFT_32BIT);
-        done = rev_vert_step_one_tap_T<si32>(s, src->i32, aug->i32,
-                                                 repeat, synthesis);
-      }
-      if (!done)
-        fb_rev_vert_step_one_tap(s, src, aug, repeat, synthesis);
+      return rev_vert_step_one_tap_T<si16>(s, sp, dst, repeat, synthesis);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    bool rev_vert_one_tap32(const lifting_step* s, const si32* sp,
+                                si32* dst, ui32 repeat, bool synthesis)
+    {
+      return rev_vert_step_one_tap_T<si32>(s, sp, dst, repeat, synthesis);
     }
 
     //////////////////////////////////////////////////////////////////////////
@@ -328,7 +229,6 @@ namespace ojph {
     // single pass; the null update step of the kernel changes nothing.
     // Values are identical to the two-pass (deinterleave, then lift)
     // implementations.
-    static
     void rev13_horz_ana32(const si32* sp, si32* lp, si32* hp,
                               ui32 width, bool even)
     {
@@ -396,7 +296,6 @@ namespace ojph {
     //////////////////////////////////////////////////////////////////////////
     // Synthesis: apply the inverse 5/3 predict step and interleave into
     // the output in a single pass; the inverse of rev13_horz_ana32.
-    static
     void rev13_horz_syn32(si32* dp, const si32* lp, const si32* hp,
                               ui32 width, bool even)
     {
@@ -462,19 +361,6 @@ namespace ojph {
     //////////////////////////////////////////////////////////////////////////
 
     //////////////////////////////////////////////////////////////////////////
-    // True when the kernel is the classic 5/3 kernel (the 5/3 update step
-    // then the 5/3 predict step), for which fused single-pass horizontal
-    // transforms are provided below.
-    static inline bool is_rev53_kernel(const param_atk* atk)
-    {
-      if (atk->get_num_steps() != 2)
-        return false;
-      const lifting_step* s0 = atk->get_step(0);
-      return s0->rev.Aatk == 1 && s0->rev.Batk == 2 && s0->rev.Eatk == 2 &&
-             is_53_predict_step(atk->get_step(1));
-    }
-
-    //////////////////////////////////////////////////////////////////////////
     // returns [prev[L-1], v[0], ..., v[L-2]], i.e. v shifted up one lane
     // with the last lane of prev shifted in
     static inline hn::Vec<hn::ScalableTag<si32> >
@@ -499,7 +385,6 @@ namespace ojph {
     // by combining the previous block's H values with the current ones
     // (lane 0 of the first block gets the boundary extension), so values
     // are identical to the two-pass implementations.
-    static
     void rev53_horz_ana32(const si32* sp, si32* lp, si32* hp,
                               ui32 width, bool even)
     {
@@ -599,7 +484,6 @@ namespace ojph {
     // rev53_horz_ana32.  The updated low-pass values L' are
     // recomputed where a lane needs its neighbour, so values are
     // identical to the two-pass implementations.
-    static
     void rev53_horz_syn32(si32* dp, const si32* lp, const si32* hp,
                               ui32 width, bool even)
     {
@@ -748,7 +632,6 @@ namespace ojph {
 
     //////////////////////////////////////////////////////////////////////////
     // Analysis; values identical to gen_rev_horz_ana32
-    static
     void rev_horz_ws_ana32(const param_atk* atk, const line_buf* ldst,
                                const line_buf* hdst, const line_buf* src,
                                ui32 width, bool even)
@@ -805,7 +688,6 @@ namespace ojph {
 
     //////////////////////////////////////////////////////////////////////////
     // Synthesis; values identical to gen_rev_horz_syn32
-    static
     void rev_horz_ws_syn32(const param_atk* atk, const line_buf* dst,
                                const line_buf* lsrc, const line_buf* hsrc,
                                ui32 width, bool even)
@@ -858,44 +740,6 @@ namespace ojph {
           hn::StoreInterleaved2(l, h, d, dp + 2 * i);
         }
       }
-    }
-
-    //////////////////////////////////////////////////////////////////////////
-    static
-    void simd_rev_horz_ana(const param_atk* atk, const line_buf* ldst,
-                          const line_buf* hdst, const line_buf* src,
-                          ui32 width, bool even)
-    {
-      if (width > 1 && (src->flags & line_buf::LFT_32BIT))
-      {
-        if (is_rev13_kernel(atk))
-          rev13_horz_ana32(src->i32, ldst->i32, hdst->i32, width, even);
-        else if (is_rev53_kernel(atk))
-          rev53_horz_ana32(src->i32, ldst->i32, hdst->i32, width, even);
-        else
-          rev_horz_ws_ana32(atk, ldst, hdst, src, width, even);
-      }
-      else
-        fb_rev_horz_ana(atk, ldst, hdst, src, width, even);
-    }
-
-    //////////////////////////////////////////////////////////////////////////
-    static
-    void simd_rev_horz_syn(const param_atk* atk, const line_buf* dst,
-                          const line_buf* lsrc, const line_buf* hsrc,
-                          ui32 width, bool even)
-    {
-      if (width > 1 && (dst->flags & line_buf::LFT_32BIT))
-      {
-        if (is_rev13_kernel(atk))
-          rev13_horz_syn32(dst->i32, lsrc->i32, hsrc->i32, width, even);
-        else if (is_rev53_kernel(atk))
-          rev53_horz_syn32(dst->i32, lsrc->i32, hsrc->i32, width, even);
-        else
-          rev_horz_ws_syn32(atk, dst, lsrc, hsrc, width, even);
-      }
-      else
-        fb_rev_horz_syn(atk, dst, lsrc, hsrc, width, even);
     }
 
     //////////////////////////////////////////////////////////////////////////
@@ -1006,51 +850,31 @@ namespace ojph {
     }
 
     //////////////////////////////////////////////////////////////////////////
-    static
-    void simd_rev_horz_ana_arb(const param_atk* atk, const line_buf* ldst,
-                              const line_buf* hdst, const line_buf* src,
-                              ui32 width, bool even)
+    void rev_horz_ana_prev16(si16* lp, si16* hp, const si16* sp,
+                                 ui32 width, bool even)
     {
-      if (width > 1 && is_prev_sample_kernel(atk))
-      {
-        if (src->flags & line_buf::LFT_16BIT)
-        {
-          rev_horz_ana_prev_T<si16>(ldst->i16, hdst->i16, src->i16,
-                                        width, even);
-          return;
-        }
-        else if (src->flags & line_buf::LFT_32BIT)
-        {
-          rev_horz_ana_prev_T<si32>(ldst->i32, hdst->i32, src->i32,
-                                        width, even);
-          return;
-        }
-      }
-      fb_rev_horz_ana_arb(atk, ldst, hdst, src, width, even);
+      rev_horz_ana_prev_T<si16>(lp, hp, sp, width, even);
     }
 
     //////////////////////////////////////////////////////////////////////////
-    static
-    void simd_rev_horz_syn_arb(const param_atk* atk, const line_buf* dst,
-                              const line_buf* lsrc, const line_buf* hsrc,
-                              ui32 width, bool even)
+    void rev_horz_ana_prev32(si32* lp, si32* hp, const si32* sp,
+                                 ui32 width, bool even)
     {
-      if (width > 1 && is_prev_sample_kernel(atk))
-      {
-        if (dst->flags & line_buf::LFT_16BIT)
-        {
-          rev_horz_syn_prev_T<si16>(dst->i16, lsrc->i16, hsrc->i16,
-                                        width, even);
-          return;
-        }
-        else if (dst->flags & line_buf::LFT_32BIT)
-        {
-          rev_horz_syn_prev_T<si32>(dst->i32, lsrc->i32, hsrc->i32,
-                                        width, even);
-          return;
-        }
-      }
-      fb_rev_horz_syn_arb(atk, dst, lsrc, hsrc, width, even);
+      rev_horz_ana_prev_T<si32>(lp, hp, sp, width, even);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    void rev_horz_syn_prev16(si16* dp, const si16* lp, const si16* hp,
+                                 ui32 width, bool even)
+    {
+      rev_horz_syn_prev_T<si16>(dp, lp, hp, width, even);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    void rev_horz_syn_prev32(si32* dp, const si32* lp, const si32* hp,
+                                 ui32 width, bool even)
+    {
+      rev_horz_syn_prev_T<si32>(dp, lp, hp, width, even);
     }
 
     //////////////////////////////////////////////////////////////////////////
@@ -1076,7 +900,6 @@ namespace ojph {
     // (this file is compiled with -ffp-contract=off, so Mul and Add are
     // not fused, keeping results identical to the generic and SSE/AVX
     // implementations)
-    static
     void simd_irv_vert_step(const lifting_step* s, const line_buf* sig,
                            const line_buf* other, const line_buf* aug,
                            ui32 repeat, bool synthesis)
@@ -1102,7 +925,6 @@ namespace ojph {
     }
 
     //////////////////////////////////////////////////////////////////////////
-    static
     void simd_irv_vert_times_K(float K, const line_buf* aug, ui32 repeat)
     {
       multiply_const(aug->f32, K, repeat);
@@ -1111,7 +933,6 @@ namespace ojph {
     //////////////////////////////////////////////////////////////////////////
     // Analysis; the structure mirrors gen_irv_horz_ana (deinterleave, one
     // pass per lifting step, then scale by K); values are identical
-    static
     void simd_irv_horz_ana(const param_atk* atk, const line_buf* ldst,
                           const line_buf* hdst, const line_buf* src,
                           ui32 width, bool even)
@@ -1184,7 +1005,6 @@ namespace ojph {
     //////////////////////////////////////////////////////////////////////////
     // Synthesis; the inverse of simd_irv_horz_ana, mirroring
     // gen_irv_horz_syn
-    static
     void simd_irv_horz_syn(const param_atk* atk, const line_buf* dst,
                           const line_buf* lsrc, const line_buf* hsrc,
                           ui32 width, bool even)
@@ -1253,30 +1073,324 @@ namespace ojph {
       }
     }
 
+    } // !HWY_NAMESPACE namespace
+  } // !local namespace
+} // !ojph namespace
+HWY_AFTER_NAMESPACE();
+
+#if HWY_ONCE
+
+namespace ojph {
+  namespace local {
+
+    HWY_EXPORT(rev_vert_step32);
+    HWY_EXPORT(rev_vert_one_tap16);
+    HWY_EXPORT(rev_vert_one_tap32);
+    HWY_EXPORT(rev13_horz_ana32);
+    HWY_EXPORT(rev13_horz_syn32);
+    HWY_EXPORT(rev53_horz_ana32);
+    HWY_EXPORT(rev53_horz_syn32);
+    HWY_EXPORT(rev_horz_ws_ana32);
+    HWY_EXPORT(rev_horz_ws_syn32);
+    HWY_EXPORT(rev_horz_ana_prev16);
+    HWY_EXPORT(rev_horz_ana_prev32);
+    HWY_EXPORT(rev_horz_syn_prev16);
+    HWY_EXPORT(rev_horz_syn_prev32);
+    HWY_EXPORT(simd_irv_vert_step);
+    HWY_EXPORT(simd_irv_vert_times_K);
+    HWY_EXPORT(simd_irv_horz_ana);
+    HWY_EXPORT(simd_irv_horz_syn);
+
     //////////////////////////////////////////////////////////////////////////
-    // True when the CPU supports the Highway target this file was
-    // compiled for (targets are bitflags; smaller is newer)
-    static inline bool static_target_supported()
+    // The functions selected before Highway installation; used for the
+    // cases the Highway implementations do not handle.
+    static void (*fb_rev_vert_step)
+      (const lifting_step* s, const line_buf* sig, const line_buf* other,
+        const line_buf* aug, ui32 repeat, bool synthesis) = NULL;
+    static void (*fb_rev_horz_ana)
+      (const param_atk* atk, const line_buf* ldst, const line_buf* hdst,
+        const line_buf* src, ui32 width, bool even) = NULL;
+    static void (*fb_rev_horz_syn)
+      (const param_atk* atk, const line_buf* dst, const line_buf* lsrc,
+        const line_buf* hsrc, ui32 width, bool even) = NULL;
+    static void (*fb_rev_vert_step_one_tap)
+      (const lifting_step* s, const line_buf* src, const line_buf* aug,
+        ui32 repeat, bool synthesis) = NULL;
+    static void (*fb_rev_horz_ana_arb)
+      (const param_atk* atk, const line_buf* ldst, const line_buf* hdst,
+        const line_buf* src, ui32 width, bool even) = NULL;
+    static void (*fb_rev_horz_syn_arb)
+      (const param_atk* atk, const line_buf* dst, const line_buf* lsrc,
+        const line_buf* hsrc, ui32 width, bool even) = NULL;
+
+    //////////////////////////////////////////////////////////////////////////
+    // True when the lifting step is a no-op; it adds
+    // (Batk + Aatk * x) >> Eatk, which is identically zero when Aatk == 0
+    // and Batk >> Eatk == 0.
+    static inline bool is_null_step(const lifting_step* s)
+    {
+      return s->rev.Aatk == 0 && (s->rev.Batk >> s->rev.Eatk) == 0;
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    // True when the kernel is the 5/3 predict step (see the generic
+    // implementations in ojph_transform.cpp).
+    static inline bool is_53_predict_step(const lifting_step* s)
+    {
+      return s->rev.Aatk == -1 && s->rev.Batk == 1 && s->rev.Eatk == 1;
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    // True when the kernel is the two-step previous-sample predict-only
+    // kernel; same as is_fused_prev_sample_kernel in ojph_transform.cpp.
+    static inline bool is_prev_sample_kernel(const param_atk* atk)
+    {
+      if (atk->get_num_steps() != 2)
+        return false;
+      const lifting_step* s1 = atk->get_step(1);
+      return is_null_step(atk->get_step(0)) &&
+             s1->rev.Aatk == -1 && s1->rev.Batk == 0 && s1->rev.Eatk == 0 &&
+             s1->rev.Oatk == 0;
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    // True when the kernel is the rev13 kernel (a null update step then
+    // the 5/3 predict step), for which fused single-pass horizontal
+    // transforms are provided above.
+    static inline bool is_rev13_kernel(const param_atk* atk)
+    {
+      return atk->get_num_steps() == 2 && is_null_step(atk->get_step(0)) &&
+             is_53_predict_step(atk->get_step(1));
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    // True when the kernel is the classic 5/3 kernel (the 5/3 update step
+    // then the 5/3 predict step), for which fused single-pass horizontal
+    // transforms are provided above.
+    static inline bool is_rev53_kernel(const param_atk* atk)
+    {
+      if (atk->get_num_steps() != 2)
+        return false;
+      const lifting_step* s0 = atk->get_step(0);
+      return s0->rev.Aatk == 1 && s0->rev.Batk == 2 && s0->rev.Eatk == 2 &&
+             is_53_predict_step(atk->get_step(1));
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    static
+    void simd_rev_vert_step(const lifting_step* s, const line_buf* sig,
+                           const line_buf* other, const line_buf* aug,
+                           ui32 repeat, bool synthesis)
+    {
+      if (is_null_step(s))
+        return; // the step changes nothing; rev13 update steps are such
+
+      // Measurements show the hand-written SIMD vertical steps (SSE2/AVX2)
+      // are slightly faster than the Highway loop of the same width; use
+      // the Highway loop only when the generic implementation would run
+      // otherwise.
+      if (fb_rev_vert_step != gen_rev_vert_step)
+      {
+        fb_rev_vert_step(s, sig, other, aug, repeat, synthesis);
+        return;
+      }
+
+      if (((sig != NULL) && (sig->flags & line_buf::LFT_32BIT)) ||
+          ((aug != NULL) && (aug->flags & line_buf::LFT_32BIT)) ||
+          ((other != NULL) && (other->flags & line_buf::LFT_32BIT)))
+      {
+        assert((sig == NULL || sig->flags & line_buf::LFT_32BIT) &&
+               (other == NULL || other->flags & line_buf::LFT_32BIT) &&
+               (aug == NULL || aug->flags & line_buf::LFT_32BIT));
+        HWY_DYNAMIC_DISPATCH(rev_vert_step32)(s, sig->i32, other->i32,
+                                              aug->i32, repeat, synthesis);
+      }
+      else
+        fb_rev_vert_step(s, sig, other, aug, repeat, synthesis);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    static
+    void simd_rev_vert_step_one_tap(const lifting_step* s,
+                                   const line_buf* src, const line_buf* aug,
+                                   ui32 repeat, bool synthesis)
+    {
+      bool done = false;
+      if (aug->flags & line_buf::LFT_16BIT)
+      {
+        assert(src == NULL || src->flags & line_buf::LFT_16BIT);
+        done = HWY_DYNAMIC_DISPATCH(rev_vert_one_tap16)(s, src->i16,
+                 aug->i16, repeat, synthesis);
+      }
+      else if (aug->flags & line_buf::LFT_32BIT)
+      {
+        assert(src == NULL || src->flags & line_buf::LFT_32BIT);
+        done = HWY_DYNAMIC_DISPATCH(rev_vert_one_tap32)(s, src->i32,
+                 aug->i32, repeat, synthesis);
+      }
+      if (!done)
+        fb_rev_vert_step_one_tap(s, src, aug, repeat, synthesis);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    static
+    void simd_rev_horz_ana(const param_atk* atk, const line_buf* ldst,
+                          const line_buf* hdst, const line_buf* src,
+                          ui32 width, bool even)
+    {
+      if (width > 1 && (src->flags & line_buf::LFT_32BIT))
+      {
+        if (is_rev13_kernel(atk))
+          HWY_DYNAMIC_DISPATCH(rev13_horz_ana32)(src->i32, ldst->i32,
+            hdst->i32, width, even);
+        else if (is_rev53_kernel(atk))
+          HWY_DYNAMIC_DISPATCH(rev53_horz_ana32)(src->i32, ldst->i32,
+            hdst->i32, width, even);
+        else
+          HWY_DYNAMIC_DISPATCH(rev_horz_ws_ana32)(atk, ldst, hdst, src,
+            width, even);
+      }
+      else
+        fb_rev_horz_ana(atk, ldst, hdst, src, width, even);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    static
+    void simd_rev_horz_syn(const param_atk* atk, const line_buf* dst,
+                          const line_buf* lsrc, const line_buf* hsrc,
+                          ui32 width, bool even)
+    {
+      if (width > 1 && (dst->flags & line_buf::LFT_32BIT))
+      {
+        if (is_rev13_kernel(atk))
+          HWY_DYNAMIC_DISPATCH(rev13_horz_syn32)(dst->i32, lsrc->i32,
+            hsrc->i32, width, even);
+        else if (is_rev53_kernel(atk))
+          HWY_DYNAMIC_DISPATCH(rev53_horz_syn32)(dst->i32, lsrc->i32,
+            hsrc->i32, width, even);
+        else
+          HWY_DYNAMIC_DISPATCH(rev_horz_ws_syn32)(atk, dst, lsrc, hsrc,
+            width, even);
+      }
+      else
+        fb_rev_horz_syn(atk, dst, lsrc, hsrc, width, even);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    static
+    void simd_rev_horz_ana_arb(const param_atk* atk, const line_buf* ldst,
+                              const line_buf* hdst, const line_buf* src,
+                              ui32 width, bool even)
+    {
+      if (width > 1 && is_prev_sample_kernel(atk))
+      {
+        if (src->flags & line_buf::LFT_16BIT)
+        {
+          HWY_DYNAMIC_DISPATCH(rev_horz_ana_prev16)(ldst->i16, hdst->i16,
+            src->i16, width, even);
+          return;
+        }
+        else if (src->flags & line_buf::LFT_32BIT)
+        {
+          HWY_DYNAMIC_DISPATCH(rev_horz_ana_prev32)(ldst->i32, hdst->i32,
+            src->i32, width, even);
+          return;
+        }
+      }
+      fb_rev_horz_ana_arb(atk, ldst, hdst, src, width, even);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    static
+    void simd_rev_horz_syn_arb(const param_atk* atk, const line_buf* dst,
+                              const line_buf* lsrc, const line_buf* hsrc,
+                              ui32 width, bool even)
+    {
+      if (width > 1 && is_prev_sample_kernel(atk))
+      {
+        if (dst->flags & line_buf::LFT_16BIT)
+        {
+          HWY_DYNAMIC_DISPATCH(rev_horz_syn_prev16)(dst->i16, lsrc->i16,
+            hsrc->i16, width, even);
+          return;
+        }
+        else if (dst->flags & line_buf::LFT_32BIT)
+        {
+          HWY_DYNAMIC_DISPATCH(rev_horz_syn_prev32)(dst->i32, lsrc->i32,
+            hsrc->i32, width, even);
+          return;
+        }
+      }
+      fb_rev_horz_syn_arb(atk, dst, lsrc, hsrc, width, even);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    static
+    void simd_irv_vert_step(const lifting_step* s, const line_buf* sig,
+                           const line_buf* other, const line_buf* aug,
+                           ui32 repeat, bool synthesis)
+    {
+      HWY_DYNAMIC_DISPATCH(simd_irv_vert_step)(s, sig, other, aug,
+                                               repeat, synthesis);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    static
+    void simd_irv_vert_times_K(float K, const line_buf* aug, ui32 repeat)
+    {
+      HWY_DYNAMIC_DISPATCH(simd_irv_vert_times_K)(K, aug, repeat);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    static
+    void simd_irv_horz_ana(const param_atk* atk, const line_buf* ldst,
+                          const line_buf* hdst, const line_buf* src,
+                          ui32 width, bool even)
+    {
+      HWY_DYNAMIC_DISPATCH(simd_irv_horz_ana)(atk, ldst, hdst, src,
+                                              width, even);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    static
+    void simd_irv_horz_syn(const param_atk* atk, const line_buf* dst,
+                          const line_buf* lsrc, const line_buf* hsrc,
+                          ui32 width, bool even)
+    {
+      HWY_DYNAMIC_DISPATCH(simd_irv_horz_syn)(atk, dst, lsrc, hsrc,
+                                              width, even);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    // True when at least one of the SIMD targets compiled into this file
+    // is available at run time.  hwy assumes its baseline target is
+    // supported without checking, so when the baseline needs more than
+    // the architecture guarantees (an MSVC /arch:AVX2 build; the GCC and
+    // clang builds keep the baseline at portable EMU128), verify it with
+    // our own CPU detection.
+    static inline bool hwy_target_available()
     {
 #if defined(OJPH_ARCH_X86_64) || defined(OJPH_ARCH_I386)
   #if HWY_STATIC_TARGET <= HWY_AVX3
-      return get_cpu_ext_level() >= X86_CPU_EXT_LEVEL_AVX512;
+      if (get_cpu_ext_level() < X86_CPU_EXT_LEVEL_AVX512)
+        return false;
   #elif HWY_STATIC_TARGET <= HWY_AVX2
-      return get_cpu_ext_level() >= X86_CPU_EXT_LEVEL_AVX2FMA;
+      if (get_cpu_ext_level() < X86_CPU_EXT_LEVEL_AVX2FMA)
+        return false;
   #elif HWY_STATIC_TARGET <= HWY_SSE4
-      return get_cpu_ext_level() >= X86_CPU_EXT_LEVEL_SSE42;
-  #else
-      return true;
+      if (get_cpu_ext_level() < X86_CPU_EXT_LEVEL_SSE42)
+        return false;
   #endif
-#else
-      return true;
 #endif
+      const int64_t simd = hwy::SupportedTargets() & HWY_TARGETS &
+                           ~(HWY_EMU128 | HWY_SCALAR);
+      return simd != 0;
     }
 
     //////////////////////////////////////////////////////////////////////////
     void install_irv_transforms()
     {
-      if (!static_target_supported())
+      if (!hwy_target_available())
         return;
       irv_vert_step    = simd_irv_vert_step;
       irv_vert_times_K = simd_irv_vert_times_K;
@@ -1287,9 +1401,7 @@ namespace ojph {
     //////////////////////////////////////////////////////////////////////////
     void install_rev_transforms()
     {
-      // this file is compiled for a fixed Highway target; install only
-      // when the CPU supports it
-      if (!static_target_supported())
+      if (!hwy_target_available())
         return;
       fb_rev_vert_step         = rev_vert_step;
       fb_rev_horz_ana          = rev_horz_ana;
@@ -1308,5 +1420,7 @@ namespace ojph {
 
   } // !local namespace
 } // !ojph namespace
+
+#endif // HWY_ONCE
 
 #endif // OJPH_ENABLE_HWY
