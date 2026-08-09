@@ -406,9 +406,13 @@ namespace ojph {
         return;
   #endif
 #endif
-      const int64_t simd = hwy::SupportedTargets() & HWY_TARGETS &
-                           ~(HWY_EMU128 | HWY_SCALAR);
-      if (simd == 0)
+      const int64_t sup = hwy::SupportedTargets();
+      // SupportedTargets() re-initializes hwy's chosen dispatch target
+      // with the full detected set, counting on its caller to narrow it
+      // to the returned (possibly DisableTargets-masked) set; do so, or
+      // a preceding hwy::DisableTargets() would be ignored
+      hwy::GetChosenTarget().Update(sup);
+      if ((sup & HWY_TARGETS & ~(HWY_EMU128 | HWY_SCALAR)) == 0)
         return;
       rev_convert  = simd_rev_convert;
       rct_forward  = simd_rct_forward;
