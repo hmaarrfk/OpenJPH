@@ -918,18 +918,19 @@ namespace ojph {
         a = -a;
 
       const hn::ScalableTag<float> d;
-      const ui32 L = (ui32)hn::Lanes(d);
+      const int L = (int)hn::Lanes(d);
       const auto va = hn::Set(d, a);
 
       float* dst = aug->f32;
       const float* src1 = sig->f32, * src2 = other->f32;
-      for (ui32 i = 0; i < repeat; i += L)
+      for (int i = (int)repeat; i > 0;
+           i -= L, dst += L, src1 += L, src2 += L)
       {
-        auto s1 = hn::LoadU(d, src1 + i);
-        auto s2 = hn::LoadU(d, src2 + i);
-        auto dv = hn::LoadU(d, dst + i);
+        auto s1 = hn::LoadU(d, src1);
+        auto s2 = hn::LoadU(d, src2);
+        auto dv = hn::LoadU(d, dst);
         dv = hn::Add(dv, hn::Mul(va, hn::Add(s1, s2)));
-        hn::StoreU(dv, d, dst + i);
+        hn::StoreU(dv, d, dst);
       }
     }
 
