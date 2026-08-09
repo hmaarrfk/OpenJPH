@@ -33,6 +33,6 @@
 // File: ojph_base.h
 //***************************************************************************/
 
-#define OPENJPH_VERSION_MAJOR 0
-#define OPENJPH_VERSION_MINOR 30
-#define OPENJPH_VERSION_PATCH 1
+#define OPENJPH_VERSION_MAJOR 1
+#define OPENJPH_VERSION_MINOR 0
+#define OPENJPH_VERSION_PATCH 0
