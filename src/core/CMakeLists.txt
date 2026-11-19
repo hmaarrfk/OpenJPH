@@ -149,6 +149,7 @@ elseif (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
 endif()
 
 add_library(ojph ${SOURCES})
+add_library(ojph::ojph ALIAS ojph)
 
 if (OJPH_USE_HWY)
   target_compile_definitions(ojph PRIVATE OJPH_ENABLE_HWY)
