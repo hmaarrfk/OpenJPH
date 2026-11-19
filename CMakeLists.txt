@@ -279,6 +279,7 @@ endif()
 ################################################################################################
 
 install(EXPORT ojph-targets
+  NAMESPACE ojph::
   DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ojph
 )
 
