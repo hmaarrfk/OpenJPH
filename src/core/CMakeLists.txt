@@ -196,10 +196,9 @@ if (NOT MSVC)
 endif()
 
 if (MSVC)
-  set(OJPH_LIB_NAME_STRING "ojph.${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}")
-  set_target_properties(ojph
-    PROPERTIES
-      OUTPUT_NAME "ojph.${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}")
+  # A plain name, so that -lojph in ojph.pc and the CMake package name the
+  # same library as on other platforms.
+  set(OJPH_LIB_NAME_STRING "ojph")
 else()
   set(OJPH_LIB_NAME_STRING "ojph.${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}")
   set_target_properties(ojph
