@@ -1,0 +1,93 @@
+name: Installed library
+
+# Builds and installs the library, then builds tests/consumer against the
+# install, with find_package(ojph) and with pkg-config, and runs it.
+
+on:
+  push:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  consumer:
+    name: ${{ matrix.runner }} ${{ matrix.library }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-latest, library: shared }
+          - { runner: ubuntu-latest, library: static }
+          - { runner: ubuntu-24.04-arm, library: shared }
+          - { runner: macos-latest, library: shared }
+          - { runner: windows-latest, library: shared }
+    env:
+      LIBRARY: ${{ matrix.library }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build and install
+        run: |
+          prefix="$RUNNER_TEMP/prefix"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            prefix="$(cygpath -m "$prefix")"
+          fi
+          echo "PREFIX=$prefix" >> "$GITHUB_ENV"
+          shared=ON
+          if [ "$LIBRARY" = "static" ]; then
+            shared=OFF
+          fi
+          cmake -S . -B build "-DCMAKE_INSTALL_PREFIX=$prefix" \
+            "-DBUILD_SHARED_LIBS=$shared" \
+            -DOJPH_BUILD_EXECUTABLES=OFF -DOJPH_ENABLE_TIFF_SUPPORT=OFF
+          cmake --build build --config Release --parallel
+          cmake --install build --config Release
+          find "$prefix" -type f -o -type l | LC_ALL=C sort
+
+      - name: Check the install layout
+        run: |
+          cd "$PREFIX"
+          for header in ojph_arch.h ojph_arg.h ojph_base.h ojph_codestream.h \
+                        ojph_defs.h ojph_file.h ojph_mem.h ojph_message.h \
+                        ojph_params.h ojph_version.h; do
+            test -f "include/ojph/$header"
+          done
+          test -f lib/cmake/ojph/ojph-config.cmake
+          test -f lib/cmake/ojph/ojph-config-version.cmake
+          test -f lib/pkgconfig/ojph.pc
+
+      - name: Build and run the consumer with find_package
+        run: |
+          cmake -S tests/consumer -B consumer-build "-DCMAKE_PREFIX_PATH=$PREFIX"
+          cmake --build consumer-build --config Release
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            PATH="$(cygpath -u "$PREFIX/bin"):$PATH"
+          fi
+          ctest --test-dir consumer-build --build-config Release \
+            --output-on-failure --timeout 300
+
+      - name: Build and run the consumer with pkg-config
+        if: matrix.library == 'shared' && runner.os != 'Windows'
+        run: |
+          if ! command -v pkg-config > /dev/null; then
+            brew install pkgconf
+          fi
+          export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig"
+          pkg-config --modversion ojph
+          read -r -a flags <<< "$(pkg-config --cflags --libs ojph)"
+          c++ -std=c++14 tests/consumer/roundtrip.cpp "${flags[@]}" \
+            "-Wl,-rpath,$PREFIX/lib" -o roundtrip-pkg-config
+          ./roundtrip-pkg-config
