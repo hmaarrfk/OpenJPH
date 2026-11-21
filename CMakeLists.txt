@@ -4,7 +4,14 @@ cmake_minimum_required(VERSION 3.12.0)
 include(ojph_version.cmake)
 
 ## project
-project (ojph VERSION ${OPENJPH_VERSION} DESCRIPTION "ojph, a fork of OpenJPH, co-installable with it" LANGUAGES C CXX)
+# A parent project that versions the library separately from the codec sets
+# OJPH_PROJECT_VERSION (X.Y.Z, used for the CMake package version and the
+# shared library version) and, optionally, OJPH_PKG_CONFIG_VERSION (the
+# Version: of ojph.pc).  Without them, both follow ojph_version.h.
+if (NOT DEFINED OJPH_PROJECT_VERSION)
+  set(OJPH_PROJECT_VERSION ${OPENJPH_VERSION})
+endif()
+project (ojph VERSION ${OJPH_PROJECT_VERSION} DESCRIPTION "ojph, a fork of OpenJPH, co-installable with it" LANGUAGES C CXX)
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 
 ################################################################################################
@@ -308,6 +315,10 @@ if(IS_ABSOLUTE "${CMAKE_INSTALL_LIBDIR}")
   set(PKG_CONFIG_LIBDIR "${CMAKE_INSTALL_LIBDIR}")
 else()
   set(PKG_CONFIG_LIBDIR "\${prefix}/${CMAKE_INSTALL_LIBDIR}")
+endif()
+
+if (NOT DEFINED OJPH_PKG_CONFIG_VERSION)
+  set(OJPH_PKG_CONFIG_VERSION ${PROJECT_VERSION})
 endif()
 
 configure_file(
