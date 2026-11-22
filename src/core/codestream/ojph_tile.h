@@ -72,6 +72,8 @@ namespace ojph {
       void parse_tile_header(const param_sot& sot, infile_base *file,
                              const ui64& tile_start_location);
       bool pull(line_buf *, ui32 comp_num);
+      bool can_pull_into(ui32 comp_num) const;
+      bool pull_into(void *dst, ui32 sample_bytes, ui32 comp_num);
       rect get_tile_rect() { return tile_rect; }
 
     private:

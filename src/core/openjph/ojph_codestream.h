@@ -326,6 +326,18 @@ namespace ojph {
     line_buf* pull(ui32 &comp_num);
 
     /**
+     * @brief Pulls the next row, like pull(), but writes its samples into
+     *        dst as integers of sample_bytes bytes (1, 2 or 4), signed as
+     *        the component is, without the 32-bit line_buf in between.
+     *
+     * @param dst the row's first sample; the row is the component's width.
+     * @param sample_bytes the size of each sample written to dst.
+     * @param comp_num returns the component to which the row belongs.
+     * @return false when there is no row left, as pull() returns NULL.
+     */
+    bool pull_into(void *dst, ui32 sample_bytes, ui32 &comp_num);
+
+    /**
      * @brief Call this function to close the underlying file; works for both
      *        encoding and decoding codestreams.
      *

@@ -1299,5 +1299,76 @@ namespace ojph {
       return lines + comp_num;
     }
 
+    //////////////////////////////////////////////////////////////////////////
+    bool codestream::pull_into(void *dst, ui32 sample_bytes, ui32 &comp_num)
+    {
+      bool direct = true;
+      for (ui32 i = 0; i < num_tiles.w && direct; ++i)
+        direct = tiles[i + cur_tile_row * num_tiles.w].can_pull_into(cur_comp);
+      if (!direct)
+      {
+        line_buf *line = pull(comp_num);
+        if (line == NULL)
+          return false;
+        ui32 width = recon_comp_size[comp_num].w;
+        for (ui32 x = 0; x < width; ++x)
+        {
+          si64 v = line->flags & line_buf::LFT_64BIT ? line->i64[x]
+                                                     : line->i32[x];
+          if (sample_bytes == 1)
+            ((ui8*)dst)[x] = (ui8)v;
+          else if (sample_bytes == 2)
+            ((ui16*)dst)[x] = (ui16)v;
+          else
+            ((ui32*)dst)[x] = (ui32)v;
+        }
+        return true;
+      }
+
+      bool success = false;
+      while (!success)
+      {
+        success = true;
+        for (ui32 i = 0; i < num_tiles.w; ++i)
+        {
+          ui32 idx = i + cur_tile_row * num_tiles.w;
+          if ((success &= tiles[idx].pull_into(dst, sample_bytes, cur_comp))
+              == false)
+            break;
+        }
+        cur_tile_row += success == false ? 1 : 0;
+        if (cur_tile_row >= num_tiles.h)
+          cur_tile_row = 0;
+      }
+      comp_num = cur_comp;
+
+      if (planar)
+      {
+        if (++cur_line >= recon_comp_size[cur_comp].h)
+        {
+          cur_line = 0;
+          cur_tile_row = 0;
+          if (cur_comp++ >= num_comps)
+          {
+            comp_num = 0;
+            return false;
+          }
+        }
+      }
+      else
+      {
+        if (++cur_comp >= num_comps)
+        {
+          cur_comp = 0;
+          if (cur_line++ >= recon_comp_size[cur_comp].h)
+          {
+            comp_num = 0;
+            return false;
+          }
+        }
+      }
+      return true;
+    }
+
   }
 }

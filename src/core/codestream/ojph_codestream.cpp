@@ -195,6 +195,12 @@ namespace ojph {
     return state->pull(comp_num);
   }
 
+  ////////////////////////////////////////////////////////////////////////////
+  bool codestream::pull_into(void *dst, ui32 sample_bytes, ui32 &comp_num)
+  {
+    return state->pull_into(dst, sample_bytes, comp_num);
+  }
+
 
   ////////////////////////////////////////////////////////////////////////////
   void codestream::flush()
