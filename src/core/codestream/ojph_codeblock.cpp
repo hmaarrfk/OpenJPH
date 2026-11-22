@@ -38,6 +38,11 @@
 
 
 #include <climits>
+#include <cstring>
+#include "ojph_arch.h"
+#if defined(OJPH_ARCH_X86_64) && !defined(OJPH_DISABLE_SIMD)
+#include <emmintrin.h>
+#endif
 #include <cmath>
 
 #include "ojph_mem.h"
@@ -282,11 +287,83 @@ namespace ojph {
         else
         {
           assert(precision == BUF64);
-          result = this->codeblock_functions.decode_cb64(
-            coded_cb->next_coded->buf + coded_cb_header::prefix_buf_size,
-            buf64, coded_cb->missing_msbs, coded_cb->num_passes,
-            coded_cb->pass_length[0], coded_cb->pass_length[1],
-            cb_size.w, cb_size.h, stride, stripe_causal);
+          // The decoders place a sample's bits relative to the cleanup
+          // pass's least significant bitplane, p = 62 - missing_msbs here
+          // and p = 30 - missing_msbs for 32-bit codeblocks, and fail when
+          // a sample needs more bits than missing_msbs + 2.  So a 64-bit
+          // codeblock decodes as a 32-bit one with min(missing_msbs, 28)
+          // missing MSBs (28 is the most that still gives the SPP and MRP
+          // passes their bitplanes), and its magnitudes shifted up by the
+          // difference in p, as long as no sample needs more than 30 bits;
+          // the 32-bit decoders are much faster.  The 32-bit decoder
+          // writes into the second half of buf64, which is then widened
+          // into buf64 from the start; a widened group of samples never
+          // overwrites samples that are yet to be read.  When the 32-bit
+          // decoder fails, the 64-bit decoder decides.  Since a failed
+          // attempt costs nearly as much as a successful one, the next 32
+          // 64-bit codeblocks after a failure skip it; images that need
+          // more than 30 bits tend to need them in most codeblocks.
+          static thread_local ui32 skip_32bit_attempts = 0;
+          result = false;
+          ui32 m = coded_cb->missing_msbs;
+          if (skip_32bit_attempts > 0)
+            --skip_32bit_attempts;
+          else if (m <= 32 + 28)
+          {
+            ui32 m32 = m < 28 ? m : 28;
+            ui32 shift = 32 + m32 - m;
+            ui32 *half = (ui32*)(buf64 + buf_size / 2);
+            result = this->codeblock_functions.decode_cb32(
+              coded_cb->next_coded->buf + coded_cb_header::prefix_buf_size,
+              half, m32, coded_cb->num_passes,
+              coded_cb->pass_length[0], coded_cb->pass_length[1],
+              cb_size.w, cb_size.h, stride, stripe_causal);
+            if (!result)
+              skip_32bit_attempts = 32;
+            else
+              for (ui32 y = 0; y < cb_size.h; ++y)
+              {
+                const ui32 *sp = half + (size_t)y * stride;
+                ui64 *dp = buf64 + (size_t)y * stride;
+#if defined(OJPH_ARCH_X86_64) && !defined(OJPH_DISABLE_SIMD)
+                const __m128i mag_mask = _mm_set1_epi32(0x7FFFFFFF);
+                const __m128i sign_mask = _mm_set1_epi32((int)0x80000000u);
+                const __m128i zero = _mm_setzero_si128();
+                const __m128i count = _mm_cvtsi32_si128((int)shift);
+                for (ui32 x = 0; x < cb_size.w; x += 4)
+                {
+                  __m128i v = _mm_loadu_si128((const __m128i*)(sp + x));
+                  __m128i mag = _mm_and_si128(v, mag_mask);
+                  __m128i sign = _mm_and_si128(v, sign_mask);
+                  __m128i lo = _mm_sll_epi64(_mm_unpacklo_epi32(mag, zero),
+                                             count);
+                  __m128i hi = _mm_sll_epi64(_mm_unpackhi_epi32(mag, zero),
+                                             count);
+                  lo = _mm_or_si128(lo, _mm_unpacklo_epi32(zero, sign));
+                  hi = _mm_or_si128(hi, _mm_unpackhi_epi32(zero, sign));
+                  _mm_storeu_si128((__m128i*)(dp + x), lo);
+                  _mm_storeu_si128((__m128i*)(dp + x + 2), hi);
+                }
+#else
+                for (ui32 x = 0; x < cb_size.w; x += 4)
+                {
+                  ui32 v[4];
+                  ui64 w[4];
+                  memcpy(v, sp + x, sizeof(v));
+                  for (int k = 0; k < 4; ++k)
+                    w[k] = ((ui64)(v[k] & 0x7FFFFFFFu) << shift)
+                         | ((ui64)(v[k] & 0x80000000u) << 32);
+                  memcpy(dp + x, w, sizeof(w));
+                }
+#endif
+              }
+          }
+          if (result == false)
+            result = this->codeblock_functions.decode_cb64(
+              coded_cb->next_coded->buf + coded_cb_header::prefix_buf_size,
+              buf64, coded_cb->missing_msbs, coded_cb->num_passes,
+              coded_cb->pass_length[0], coded_cb->pass_length[1],
+              cb_size.w, cb_size.h, stride, stripe_causal);
         }
 
         if (result == false)
