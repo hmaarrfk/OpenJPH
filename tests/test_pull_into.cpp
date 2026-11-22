@@ -34,7 +34,8 @@
 //***************************************************************************/
 
 // Tests for codestream::pull_into, which writes each reconstructed row
-// into a caller's buffer of 1, 2 or 4-byte samples, and for reversible
+// into a caller's buffer of 1, 2 or 4-byte samples, saturating 1 and 2-byte
+// samples to the destination type, and for reversible
 // predict-only codestreams of signed samples, which are held in 16-bit
 // lines when they fit.
 
@@ -128,7 +129,8 @@ static std::vector<ojph::si64> decode_with_pull(ojph::mem_outfile& file,
 static std::vector<ojph::ui8> decode_with_pull_into(ojph::mem_outfile& file,
                                                     ojph::ui32 width,
                                                     ojph::ui32 height,
-                                                    ojph::ui32 sample_bytes)
+                                                    ojph::ui32 sample_bytes,
+                                                    bool dst_signed)
 {
   ojph::mem_infile infile;
   infile.open(file.get_data(), file.get_used_size());
@@ -141,7 +143,7 @@ static std::vector<ojph::ui8> decode_with_pull_into(ojph::mem_outfile& file,
     ojph::ui32 comp_num;
     EXPECT_TRUE(codestream.pull_into(
       result.data() + (size_t)y * width * sample_bytes, sample_bytes,
-      comp_num));
+      dst_signed, comp_num));
     EXPECT_EQ(comp_num, 0u);
   }
   codestream.close();
@@ -151,11 +153,13 @@ static std::vector<ojph::ui8> decode_with_pull_into(ojph::mem_outfile& file,
 static ojph::si64 narrowed(ojph::si64 v, ojph::ui32 sample_bytes,
                            bool is_signed)
 {
-  if (sample_bytes == 1)
-    return is_signed ? (ojph::si64)(ojph::si8)v : (ojph::si64)(ojph::ui8)v;
-  if (sample_bytes == 2)
-    return is_signed ? (ojph::si64)(ojph::si16)v : (ojph::si64)(ojph::ui16)v;
-  return is_signed ? (ojph::si64)(ojph::si32)v : (ojph::si64)(ojph::ui32)v;
+  if (sample_bytes == 4)
+    return is_signed ? (ojph::si64)(ojph::si32)v : (ojph::si64)(ojph::ui32)v;
+  ojph::ui32 bits = sample_bytes * 8;
+  ojph::si64 low = is_signed ? -((ojph::si64)1 << (bits - 1)) : 0;
+  ojph::si64 high = is_signed ? ((ojph::si64)1 << (bits - 1)) - 1
+                              : ((ojph::si64)1 << bits) - 1;
+  return v < low ? low : (v > high ? high : v);
 }
 
 static ojph::si64 read_sample(const std::vector<ojph::ui8>& buf, size_t i,
@@ -180,9 +184,10 @@ static ojph::si64 read_sample(const std::vector<ojph::ui8>& buf, size_t i,
 } // namespace
 
 ///////////////////////////////////////////////////////////////////////////////
-// pull_into must write the samples pull returns, at each sample size, for
-// 16-bit and 32-bit internal lines, several tiles, and the irreversible
-// path, which pull_into serves through pull.
+// pull_into must write the samples pull returns, saturated to signed and
+// unsigned 1 and 2-byte samples and as they are at 4 bytes, for 16-bit and
+// 32-bit internal lines, several tiles, and the irreversible path, which
+// pull_into serves through pull.
 TEST(TestPullInto, MatchesPull) {
   const config configs[] = {
     {  8, false, true, ojph::param_cod::OJPH_WAVELET_REV12, 0 },
@@ -202,18 +207,20 @@ TEST(TestPullInto, MatchesPull) {
     encode(file, c, width, height);
     std::vector<ojph::si64> expected = decode_with_pull(file, width, height);
     for (ojph::ui32 sample_bytes : {1u, 2u, 4u})
-    {
-      if (sample_bytes * 8 < c.bit_depth)
-        continue;
-      std::vector<ojph::ui8> got =
-        decode_with_pull_into(file, width, height, sample_bytes);
-      for (size_t i = 0; i < expected.size(); ++i)
-        ASSERT_EQ(read_sample(got, i, sample_bytes, c.is_signed),
-                  narrowed(expected[i], sample_bytes, c.is_signed))
-          << c.bit_depth << " bits, signed " << c.is_signed
-          << ", tile " << c.tile << ", " << sample_bytes
-          << "-byte samples, at " << i;
-    }
+      for (bool dst_signed : {false, true})
+      {
+        if (sample_bytes == 4 && (dst_signed != c.is_signed))
+          continue;
+        std::vector<ojph::ui8> got = decode_with_pull_into(
+          file, width, height, sample_bytes, dst_signed);
+        for (size_t i = 0; i < expected.size(); ++i)
+          ASSERT_EQ(read_sample(got, i, sample_bytes, dst_signed),
+                    narrowed(expected[i], sample_bytes, dst_signed))
+            << c.bit_depth << " bits, signed " << c.is_signed
+            << ", tile " << c.tile << ", " << sample_bytes
+            << "-byte samples, destination signed " << dst_signed
+            << ", at " << i;
+      }
   }
 }
 
@@ -232,7 +239,7 @@ TEST(TestPullInto, SignedPredictOnlyIsLossless) {
       encode(file, c, width, height);
       std::vector<ojph::si64> pulled = decode_with_pull(file, width, height);
       std::vector<ojph::ui8> into =
-        decode_with_pull_into(file, width, height, 2);
+        decode_with_pull_into(file, width, height, 2, true);
       for (ojph::ui32 y = 0; y < height; ++y)
         for (ojph::ui32 x = 0; x < width; ++x)
         {

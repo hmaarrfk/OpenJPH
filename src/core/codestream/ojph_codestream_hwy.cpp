@@ -45,6 +45,8 @@
 #include <hwy/foreach_target.h>
 #include <hwy/highway.h>
 
+#include <limits>
+
 #include "ojph_defs.h"
 #include "ojph_arch.h"
 
@@ -305,6 +307,127 @@ namespace ojph {
         dp[i] = (si32)sp[i] + shift;
     }
 
+    //////////////////////////////////////////////////////////////////////////
+    template <typename S, typename D>
+    static inline void saturate_to(const S *sp, D *dp, si32 shift, ui32 count)
+    {
+      const hn::ScalableTag<si32> d32;
+      const hn::Rebind<S, decltype(d32)> ds;
+      const hn::Rebind<D, decltype(d32)> dd;
+      const size_t N = hn::Lanes(d32);
+      const auto vshift = hn::Set(d32, shift);
+      const si32 low = (si32)std::numeric_limits<D>::min();
+      const si32 high = (si32)std::numeric_limits<D>::max();
+
+      ui32 i = 0;
+      for ( ; i + N <= count; i += (ui32)N)
+      {
+        auto v = hn::Add(hn::PromoteTo(d32, hn::LoadU(ds, sp + i)), vshift);
+        hn::StoreU(hn::DemoteTo(dd, v), dd, dp + i);
+      }
+      for ( ; i < count; ++i)
+      {
+        si32 v = (si32)sp[i] + shift;
+        dp[i] = (D)(v < low ? low : (v > high ? high : v));
+      }
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    template <typename D>
+    static inline void saturate_to(const si32 *sp, D *dp, si32 shift,
+                                   ui32 count)
+    {
+      const hn::ScalableTag<si32> d32;
+      const hn::Rebind<D, decltype(d32)> dd;
+      const size_t N = hn::Lanes(d32);
+      const auto vshift = hn::Set(d32, shift);
+      const si32 low = (si32)std::numeric_limits<D>::min();
+      const si32 high = (si32)std::numeric_limits<D>::max();
+
+      ui32 i = 0;
+      for ( ; i + N <= count; i += (ui32)N)
+      {
+        auto v = hn::Add(hn::LoadU(d32, sp + i), vshift);
+        hn::StoreU(hn::DemoteTo(dd, v), dd, dp + i);
+      }
+      for ( ; i < count; ++i)
+      {
+        si32 v = sp[i] + shift;
+        dp[i] = (D)(v < low ? low : (v > high ? high : v));
+      }
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    template <typename S>
+    static inline void saturate_line(const S *sp, void *dp, si32 shift,
+                                     ui32 count, ui32 sample_bytes,
+                                     bool dst_signed)
+    {
+      if (sample_bytes == 1) {
+        if (dst_signed) saturate_to(sp, (si8*)dp, shift, count);
+        else saturate_to(sp, (ui8*)dp, shift, count);
+      }
+      else {
+        if (dst_signed) saturate_to(sp, (si16*)dp, shift, count);
+        else saturate_to(sp, (ui16*)dp, shift, count);
+      }
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    void saturate16(const si16 *sp, void *dp, si32 shift, ui32 count,
+                    ui32 sample_bytes, bool dst_signed)
+    {
+      // 16-bit lines hold samples of at most 15 bits, so the shifted
+      // samples fit in 16-bit lanes; the saturating add only guards
+      // malformed codestreams
+      if (shift >= (1 << 15))
+      {
+        saturate_line(sp, dp, shift, count, sample_bytes, dst_signed);
+        return;
+      }
+      const hn::ScalableTag<si16> d16;
+      const hn::Rebind<si8, decltype(d16)> d8s;
+      const hn::Rebind<ui8, decltype(d16)> d8u;
+      const hn::RebindToUnsigned<decltype(d16)> d16u;
+      const size_t N = hn::Lanes(d16);
+      const auto vshift = hn::Set(d16, (si16)shift);
+      const auto zero = hn::Zero(d16);
+
+      ui32 i = 0;
+      if (sample_bytes == 1 && dst_signed)
+        for ( ; i + N <= count; i += (ui32)N)
+          hn::StoreU(hn::DemoteTo(d8s,
+            hn::SaturatedAdd(hn::LoadU(d16, sp + i), vshift)),
+            d8s, (si8*)dp + i);
+      else if (sample_bytes == 1)
+        for ( ; i + N <= count; i += (ui32)N)
+          hn::StoreU(hn::DemoteTo(d8u,
+            hn::SaturatedAdd(hn::LoadU(d16, sp + i), vshift)),
+            d8u, (ui8*)dp + i);
+      else if (dst_signed)
+        for ( ; i + N <= count; i += (ui32)N)
+          hn::StoreU(hn::SaturatedAdd(hn::LoadU(d16, sp + i), vshift),
+            d16, (si16*)dp + i);
+      else
+        for ( ; i + N <= count; i += (ui32)N)
+          hn::StoreU(hn::BitCast(d16u, hn::Max(zero,
+            hn::SaturatedAdd(hn::LoadU(d16, sp + i), vshift))),
+            d16u, (ui16*)dp + i);
+      if (i < count)
+      {
+        void *rest = (ui8*)dp + (size_t)i * sample_bytes;
+        saturate_line(sp + i, rest, shift, count - i, sample_bytes,
+                      dst_signed);
+      }
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    void saturate32(const si32 *sp, void *dp, si32 shift, ui32 count,
+                    ui32 sample_bytes, bool dst_signed)
+    {
+      saturate_line(sp, dp, shift, count, sample_bytes, dst_signed);
+    }
+
     } // !HWY_NAMESPACE
   }
 }
@@ -321,6 +444,8 @@ namespace ojph {
     HWY_EXPORT(irv_tx_to_cb32);
     HWY_EXPORT(irv_tx_from_cb32);
     HWY_EXPORT(rev_convert16);
+    HWY_EXPORT(saturate16);
+    HWY_EXPORT(saturate32);
 
     //////////////////////////////////////////////////////////////////////////
     // True when at least one of the SIMD targets compiled into this file
@@ -422,6 +547,22 @@ namespace ojph {
     void rev_convert16(const si16 *sp, si32 *dp, si32 shift, ui32 count)
     {
       HWY_DYNAMIC_DISPATCH(rev_convert16)(sp, dp, shift, count);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    void saturate16(const si16 *sp, void *dp, si32 shift, ui32 count,
+                    ui32 sample_bytes, bool dst_signed)
+    {
+      HWY_DYNAMIC_DISPATCH(saturate16)(sp, dp, shift, count, sample_bytes,
+                                       dst_signed);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    void saturate32(const si32 *sp, void *dp, si32 shift, ui32 count,
+                    ui32 sample_bytes, bool dst_signed)
+    {
+      HWY_DYNAMIC_DISPATCH(saturate32)(sp, dp, shift, count, sample_bytes,
+                                       dst_signed);
     }
 
   }

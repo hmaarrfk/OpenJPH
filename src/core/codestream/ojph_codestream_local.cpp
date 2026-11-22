@@ -1300,7 +1300,8 @@ namespace ojph {
     }
 
     //////////////////////////////////////////////////////////////////////////
-    bool codestream::pull_into(void *dst, ui32 sample_bytes, ui32 &comp_num)
+    bool codestream::pull_into(void *dst, ui32 sample_bytes,
+                               bool dst_signed, ui32 &comp_num)
     {
       bool direct = true;
       for (ui32 i = 0; i < num_tiles.w && direct; ++i)
@@ -1311,10 +1312,20 @@ namespace ojph {
         if (line == NULL)
           return false;
         ui32 width = recon_comp_size[comp_num].w;
+        si64 low = 0, high = 0;
+        if (sample_bytes < 4)
+        {
+          ui32 bits = sample_bytes * 8;
+          low = dst_signed ? -((si64)1 << (bits - 1)) : 0;
+          high = dst_signed ? ((si64)1 << (bits - 1)) - 1
+                            : ((si64)1 << bits) - 1;
+        }
         for (ui32 x = 0; x < width; ++x)
         {
           si64 v = line->flags & line_buf::LFT_64BIT ? line->i64[x]
                                                      : line->i32[x];
+          if (sample_bytes < 4)
+            v = v < low ? low : (v > high ? high : v);
           if (sample_bytes == 1)
             ((ui8*)dst)[x] = (ui8)v;
           else if (sample_bytes == 2)
@@ -1332,7 +1343,8 @@ namespace ojph {
         for (ui32 i = 0; i < num_tiles.w; ++i)
         {
           ui32 idx = i + cur_tile_row * num_tiles.w;
-          if ((success &= tiles[idx].pull_into(dst, sample_bytes, cur_comp))
+          if ((success &= tiles[idx].pull_into(dst, sample_bytes, dst_signed,
+                                                     cur_comp))
               == false)
             break;
         }

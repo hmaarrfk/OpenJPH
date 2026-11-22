@@ -73,7 +73,8 @@ namespace ojph {
                              const ui64& tile_start_location);
       bool pull(line_buf *, ui32 comp_num);
       bool can_pull_into(ui32 comp_num) const;
-      bool pull_into(void *dst, ui32 sample_bytes, ui32 comp_num);
+      bool pull_into(void *dst, ui32 sample_bytes, bool dst_signed,
+                     ui32 comp_num);
       rect get_tile_rect() { return tile_rect; }
 
     private:
