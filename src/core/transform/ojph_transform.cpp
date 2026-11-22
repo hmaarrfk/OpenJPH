@@ -110,6 +110,15 @@ namespace ojph {
       (const param_atk* atk, const line_buf* dst, const line_buf* lsrc,
         const line_buf* hsrc, ui32 width, bool even) = NULL;
 
+#ifndef OJPH_ENABLE_HWY
+    //////////////////////////////////////////////////////////////////////////
+    bool rev_horz_syn_arb_keeps_sources(const param_atk* atk)
+    {
+      ojph_unused(atk);
+      return false;
+    }
+#endif
+
     //////////////////////////////////////////////////////////////////////////
     void init_wavelet_transform_functions()
     {
