@@ -108,6 +108,7 @@ namespace ojph {
       void set_tilepart_divisions(ui32 value);
       void request_tlm_marker(bool needed);
       line_buf* pull(ui32 &comp_num);
+      bool pull_into(void *dst, ui32 sample_bytes, ui32 &comp_num);
       void flush();
       void close();
 

@@ -555,6 +555,72 @@ namespace ojph {
 
 
     //////////////////////////////////////////////////////////////////////////
+    template <typename S, typename D>
+    static inline void narrow_line(const S *sp, D *dp, si64 shift, ui32 count)
+    {
+      for (ui32 i = 0; i < count; ++i)
+        dp[i] = (D)((si64)sp[i] + shift);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    template <typename S>
+    static inline void narrow_line(const S *sp, void *dst, ui32 sample_bytes,
+                                   bool is_signed, si64 shift, ui32 count)
+    {
+      if (sample_bytes == 1) {
+        if (is_signed) narrow_line(sp, (si8*)dst, shift, count);
+        else narrow_line(sp, (ui8*)dst, shift, count);
+      }
+      else if (sample_bytes == 2) {
+        if (is_signed) narrow_line(sp, (si16*)dst, shift, count);
+        else narrow_line(sp, (ui16*)dst, shift, count);
+      }
+      else {
+        if (is_signed) narrow_line(sp, (si32*)dst, shift, count);
+        else narrow_line(sp, (ui32*)dst, shift, count);
+      }
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    bool tile::can_pull_into(ui32 comp_num) const
+    {
+      constexpr ui8 type3 =
+        param_nlt::nonlinearity::OJPH_NLT_BINARY_COMPLEMENT_NLT;
+      return (!employ_color_transform || num_comps == 1)
+        && reversible[comp_num]
+        && !(is_signed[comp_num] && nlt_type3[comp_num] == type3);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    bool tile::pull_into(void *dst, ui32 sample_bytes, ui32 comp_num)
+    {
+      assert(comp_num < num_comps && can_pull_into(comp_num));
+      if (cur_line[comp_num] >= recon_comp_rects[comp_num].siz.h)
+        return false;
+
+      cur_line[comp_num]++;
+
+      ui32 comp_width = recon_comp_rects[comp_num].siz.w;
+      if (comp_width == 0)
+        return true;
+
+      line_buf *src_line = comps[comp_num].pull_line();
+      void *out = (ui8*)dst + (size_t)line_offsets[comp_num] * sample_bytes;
+      si64 shift = is_signed[comp_num] ? 0
+        : (si64)1 << (num_bits[comp_num] - 1);
+      if (src_line->flags & line_buf::LFT_16BIT)
+        narrow_line(src_line->i16, out, sample_bytes, is_signed[comp_num],
+                    shift, comp_width);
+      else if (src_line->flags & line_buf::LFT_32BIT)
+        narrow_line(src_line->i32, out, sample_bytes, is_signed[comp_num],
+                    shift, comp_width);
+      else
+        narrow_line(src_line->i64, out, sample_bytes, is_signed[comp_num],
+                    shift, comp_width);
+      return true;
+    }
+
+    //////////////////////////////////////////////////////////////////////////
     void tile::prepare_for_flush()
     {
       this->num_bytes = 0;
