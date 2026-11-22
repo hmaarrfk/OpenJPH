@@ -357,12 +357,13 @@ namespace ojph {
         line_buf *tc = comps[comp_num].get_line();
         if (tc->flags & line_buf::LFT_16BIT)
         {
-          // 16-bit component lines hold reversible, unsigned samples with
-          // no type-3 non-linearity (see can_use_16bit_lines); narrow
-          // while applying the level shift
+          // 16-bit component lines hold reversible samples with no type-3
+          // non-linearity (see can_use_16bit_lines); narrow while applying
+          // the level shift of unsigned samples
           const si32 *sp = line->i32 + line_offsets[comp_num];
           si16 *dp = tc->i16;
-          si32 shift = (si32)((si64)1 << (num_bits[comp_num] - 1));
+          si32 shift = is_signed[comp_num] ? 0
+            : (si32)((si64)1 << (num_bits[comp_num] - 1));
           for (ui32 i = comp_width; i > 0; --i)
             *dp++ = (si16)(*sp++ - shift);
         }
@@ -462,12 +463,13 @@ namespace ojph {
         line_buf *src_line = comps[comp_num].pull_line();
         if (src_line->flags & line_buf::LFT_16BIT)
         {
-          // 16-bit component lines hold reversible, unsigned samples with
-          // no type-3 non-linearity (see can_use_16bit_lines); widen
-          // while undoing the level shift
+          // 16-bit component lines hold reversible samples with no type-3
+          // non-linearity (see can_use_16bit_lines); widen while undoing
+          // the level shift of unsigned samples
           const si16 *sp = src_line->i16;
           si32 *dp = tgt_line->i32 + line_offsets[comp_num];
-          si32 shift = (si32)((si64)1 << (num_bits[comp_num] - 1));
+          si32 shift = is_signed[comp_num] ? 0
+            : (si32)((si64)1 << (num_bits[comp_num] - 1));
 #ifdef OJPH_TILE_USE_HWY
           static const bool use_hwy = hwy_tx_kernels_available();
           if (use_hwy)
@@ -558,8 +560,15 @@ namespace ojph {
     template <typename S, typename D>
     static inline void narrow_line(const S *sp, D *dp, si64 shift, ui32 count)
     {
-      for (ui32 i = 0; i < count; ++i)
-        dp[i] = (D)((si64)sp[i] + shift);
+      if (sizeof(S) <= sizeof(ui32))
+      {
+        ui32 s = (ui32)shift;
+        for (ui32 i = 0; i < count; ++i)
+          dp[i] = (D)((ui32)sp[i] + s);
+      }
+      else
+        for (ui32 i = 0; i < count; ++i)
+          dp[i] = (D)((ui64)sp[i] + (ui64)shift);
     }
 
     //////////////////////////////////////////////////////////////////////////

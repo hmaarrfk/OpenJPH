@@ -1253,19 +1253,28 @@ namespace ojph {
     // the coefficients must fit in 16 bits (propose_precision accounts for
     // the sign bit and a coder margin), and the transformation must be a
     // predict-only arbitrary kernel, whose generic transform paths support
-    // 16-bit lines. Restricted to unsigned samples without a colour
-    // transform, so no per-sample treatment beyond the level shift applies.
+    // 16-bit lines. Restricted to samples without a colour transform or a
+    // type-3 non-linearity, so no per-sample treatment beyond the level
+    // shift of unsigned samples applies.
     static inline bool can_use_16bit_lines(const param_qcd* qp,
                                            const param_cod* cdp,
                                            const param_siz* sz,
+                                           const param_nlt* nlt,
                                            ui32 comp_num)
     {
       const param_atk* atk = cdp->access_atk();
-      return atk != NULL && atk->is_reversible() &&
-             qp->propose_precision(cdp) <= 16 &&
-             atk->is_whole_sample() == false && atk->is_predict_only() &&
-             cdp->is_employing_color_transform() == false &&
-             sz->is_signed(comp_num) == false;
+      if (atk == NULL || !atk->is_reversible() ||
+          qp->propose_precision(cdp) > 16 ||
+          atk->is_whole_sample() || !atk->is_predict_only() ||
+          cdp->is_employing_color_transform())
+        return false;
+      if (!sz->is_signed(comp_num))
+        return true;
+      ui8 bit_depth, nl_type;
+      bool is_signed;
+      return !nlt->get_nonlinear_transform(comp_num, bit_depth, is_signed,
+                                           nl_type) ||
+             nl_type != param_nlt::nonlinearity::OJPH_NLT_BINARY_COMPLEMENT_NLT;
     }
 
   } // !local namespace
