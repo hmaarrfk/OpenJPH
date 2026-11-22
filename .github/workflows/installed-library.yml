@@ -79,15 +79,42 @@ jobs:
           ctest --test-dir consumer-build --build-config Release \
             --output-on-failure --timeout 300
 
+      - name: Set up the MSVC command line
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+
       - name: Build and run the consumer with pkg-config
-        if: matrix.library == 'shared' && runner.os != 'Windows'
+        if: matrix.library == 'shared'
         run: |
           if ! command -v pkg-config > /dev/null; then
-            brew install pkgconf
+            if [ "$RUNNER_OS" = "Windows" ]; then
+              choco install --no-progress -y pkgconfiglite
+              PATH="$PATH:/c/ProgramData/chocolatey/bin"
+            else
+              brew install pkgconf
+            fi
           fi
           export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig"
           pkg-config --modversion ojph
           read -r -a flags <<< "$(pkg-config --cflags --libs ojph)"
-          c++ -std=c++14 tests/consumer/roundtrip.cpp "${flags[@]}" \
-            "-Wl,-rpath,$PREFIX/lib" -o roundtrip-pkg-config
-          ./roundtrip-pkg-config
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            # cl takes the same information in its own syntax: -I and -D
+            # become /I and /D, -L a /LIBPATH for the linker, -lname name.lib
+            compile=() link=()
+            for flag in "${flags[@]}"; do
+              case "$flag" in
+                -I*) compile+=("/I${flag#-I}") ;;
+                -D*) compile+=("/D${flag#-D}") ;;
+                -L*) link+=("/LIBPATH:${flag#-L}") ;;
+                -l*) link+=("${flag#-l}.lib") ;;
+                *) echo "unexpected flag in ojph.pc: $flag"; exit 1 ;;
+              esac
+            done
+            cl /nologo /EHsc /std:c++14 /MD tests/consumer/roundtrip.cpp \
+              "${compile[@]}" /Fe:roundtrip-pkg-config.exe /link "${link[@]}"
+            PATH="$(cygpath -u "$PREFIX/bin"):$PATH" ./roundtrip-pkg-config.exe
+          else
+            c++ -std=c++14 tests/consumer/roundtrip.cpp "${flags[@]}" \
+              "-Wl,-rpath,$PREFIX/lib" -o roundtrip-pkg-config
+            ./roundtrip-pkg-config
+          fi
