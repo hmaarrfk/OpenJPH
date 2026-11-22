@@ -58,220 +58,168 @@ namespace ojph {
   namespace local {
 
     //************************************************************************/
-    /** @brief MEL state structure for reading and decoding the MEL bitstream
+    /** @brief De-stuffs the MEL segment into a flat, MSB-first buffer
      *
-     *  A number of events is decoded from the MEL bitstream ahead of time
-     *  and stored in run/num_runs.
-     *  Each run represents the number of zero events before a one event.
-     */
-    struct dec_mel_st {
-      dec_mel_st() : data(NULL), tmp(0), bits(0), size(0), unstuff(false),
-        k(0), num_runs(0), runs(0)
-      {}
-      // data decoding machinery
-      ui8* data;    //!<the address of data (or bitstream)
-      ui64 tmp;     //!<temporary buffer for read data
-      int bits;     //!<number of bits stored in tmp
-      int size;     //!<number of bytes in MEL code
-      bool unstuff; //!<true if the next bit needs to be unstuffed
-      int k;        //!<state of MEL decoder
-
-      // queue of decoded runs
-      int num_runs; //!<number of decoded runs left in runs (maximum 8)
-      ui64 runs;    //!<runs of decoded MEL codewords (7 bits/run)
-    };
-
-    //************************************************************************/
-    /** @brief Reads and unstuffs the MEL bitstream
+     *  This replicates the bit production of the MEL reader used by the
+     *  other block decoders (mel_init and mel_read): a byte following a
+     *  0xFF byte contributes only its 7 lower bits, the last byte of the
+     *  segment has its 4 lower bits set (the MEL and VLC segments can
+     *  overlap), and bits beyond the end of the segment read as 1s.  Bits
+     *  are stored from the MSB of each output byte.
      *
-     *  This design needs more bytes in the codeblock buffer than the length
-     *  of the cleanup pass by up to 2 bytes.
+     *  Writes at most cap + 1 destuffed bytes followed by 16 bytes of
+     *  0xFF padding; dst must have room for cap + 17 bytes.
      *
-     *  Unstuffing removes the MSB of the byte following a byte whose
-     *  value is 0xFF; this prevents sequences larger than 0xFF7F in value
-     *  from appearing the bitstream.
-     *
-     *  @param [in]  melp is a pointer to dec_mel_st structure
+     *  @param [in]  src is a pointer to the start of the MEL segment
+     *  @param [in]  size is the number of bytes in the MEL segment
+     *  @param [in]  dst is the output buffer, of at least cap + 17 bytes
+     *  @param [in]  cap is the maximum number of destuffed bytes to write
      */
     static inline
-    void mel_read(dec_mel_st *melp)
+    void destuff_mel(const ui8* src, int size, ui8* dst, ui32 cap)
     {
-      if (melp->bits > 32)  //there are enough bits in the tmp variable
-        return;             // return without reading new data
-
-      ui32 val = 0xFFFFFFFF;       // feed in 0xFF if buffer is exhausted
-      if (melp->size > 4) {        // if there is data in the MEL segment
-        memcpy(&val, melp->data, 4);  // read 32 bits from MEL data
-        melp->data += 4;           // advance pointer
-        melp->size -= 4;           // reduce counter
+      ui8* o = dst;
+      ui8* o_end = dst + cap;
+      ui32 acc = 0;        // pending bits, the low nb bits are valid
+      ui32 nb = 0;         // number of valid bits in acc; always < 8
+      bool unstuff = false;
+      for (int i = 0; i < size && o < o_end; ++i)
+      {
+        ui32 d = src[i];
+        if (i == size - 1)
+          d |= 0xF;
+        ui32 d_bits = 8 - unstuff;
+        acc = (acc << d_bits) | (d & ((1u << d_bits) - 1));
+        nb += d_bits;
+        unstuff = (d == 0xFF);
+        if (nb >= 8) { nb -= 8; *o++ = (ui8)(acc >> nb); }
       }
-      else if (melp->size > 0)
-      { // 4 or less
-        int i = 0;
-        while (melp->size > 1) {
-          ui32 v = *melp->data++;    // read one byte at a time
-          ui32 m = ~(0xFFu << i);    // mask of location
-          val = (val & m) | (v << i);// put one byte in its correct location
-          --melp->size;
-          i += 8;
-        }
-        // size equal to 1
-        ui32 v = *melp->data++;    // the one before the last is different
-        v |= 0xF;                  // MEL and VLC segments can overlap
-        ui32 m = ~(0xFFu << i);
-        val = (val & m) | (v << i);
-        --melp->size;
-      }
-
-      // next we unstuff them before adding them to the buffer
-      int bits = 32 - melp->unstuff; // number of bits in val, subtract 1 if
-                                     // the previously read byte requires
-                                     // unstuffing
-
-      // data is unstuffed and accumulated in t
-      // bits has the number of bits in t
-      ui32 t = val & 0xFF;
-      bool unstuff = ((val & 0xFF) == 0xFF); // true if we need unstuffing
-      bits -= unstuff; // there is one less bit in t if unstuffing is needed
-      t = t << (8 - unstuff); // move up to make room for the next byte
-
-      //this is a repeat of the above
-      t |= (val>>8) & 0xFF;
-      unstuff = (((val >> 8) & 0xFF) == 0xFF);
-      bits -= unstuff;
-      t = t << (8 - unstuff);
-
-      t |= (val>>16) & 0xFF;
-      unstuff = (((val >> 16) & 0xFF) == 0xFF);
-      bits -= unstuff;
-      t = t << (8 - unstuff);
-
-      t |= (val>>24) & 0xFF;
-      melp->unstuff = (((val >> 24) & 0xFF) == 0xFF);
-
-      // move t to tmp, and push the result all the way up, so we read from
-      // the MSB
-      melp->tmp |= ((ui64)t) << (64 - bits - melp->bits);
-      melp->bits += bits; //increment the number of bits in tmp
+      // fill the bits below the valid ones with 1s, and pad with 0xFF
+      *o = (ui8)((acc << (8 - nb)) | (0xFFu >> nb));
+      memset(o + 1, 0xFF, 16);
     }
 
     //************************************************************************/
-    /** @brief Decodes unstuffed MEL segment bits stored in tmp to runs
+    /** @brief A table that decodes several MEL symbols in one lookup
      *
-     *  Runs are stored in "runs" and the number of runs in "num_runs".
-     *  Each run represents a number of zero events that may or may not
-     *  terminate in a 1 event.
-     *  Each run is stored in 7 bits.  The LSB is 1 if the run terminates in
-     *  a 1 event, 0 otherwise.  The next 6 bits, for the case terminating
-     *  with 1, contain the number of consecutive 0 zero events * 2; for the
-     *  case terminating with 0, they store (number of consecutive 0 zero
-     *  events - 1) * 2.
-     *  A total of 6 bits (made up of 1 + 5) should have been enough.
-     *
-     *  @param [in]  melp is a pointer to dec_mel_st structure
+     *  The index is the MEL state k times 64 plus the next 6 MEL bits.
+     *  An entry decodes as many complete symbols as these 6 bits hold,
+     *  but no more than 32 events; it always decodes at least one symbol
+     *  since a symbol has no more than 6 bits.  An entry packs the number
+     *  of bits consumed in bits 0-5, the next state times 64 in bits 6-15,
+     *  the number of events in bits 16-21, and the events, the first one
+     *  in the LSB, in bits 32-63.
      */
-    static inline
-    void mel_decode(dec_mel_st *melp)
+    static ui64 mel_tbl[13 * 64];
+
+    //************************************************************************/
+    /** @brief Initializes mel_tbl
+     */
+    static bool mel_init_table()
     {
       static const int mel_exp[13] = { //MEL exponents
         0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 4, 5
       };
+      for (int k0 = 0; k0 < 13; ++k0)
+        for (ui32 v = 0; v < 64; ++v)
+        {
+          int k = k0;
+          ui32 used = 0, count = 0;
+          ui64 events = 0;
+          while (true)
+          {
+            int eval = mel_exp[k];
+            ui32 bit = (v >> (5 - used)) & 1;
+            if (bit)
+            { // a 1 bit stands for 2^eval zero events
+              if (used + 1 > 6 || count + (1u << eval) > 32)
+                break;
+              count += 1u << eval;
+              used += 1;
+              k = k + 1 < 12 ? k + 1 : 12;
+            }
+            else
+            { // a 0 bit then eval bits r stands for r zeros and a one
+              if (used + 1 + (ui32)eval > 6)
+                break;
+              ui32 r = (v >> (6 - used - 1 - (ui32)eval))
+                     & ((1u << eval) - 1);
+              if (count + r + 1 > 32)
+                break;
+              count += r;
+              events |= (ui64)1 << count;
+              count += 1;
+              used += 1 + (ui32)eval;
+              k = k - 1 > 0 ? k - 1 : 0;
+            }
+            if (used == 6)
+              break;
+          }
+          assert(used > 0);
+          mel_tbl[k0 * 64 + (int)v] = used | ((ui64)k << 12)
+            | ((ui64)count << 16) | (events << 32);
+        }
+      return true;
+    }
 
-      if (melp->bits < 6) // if there are less than 6 bits in tmp
-        mel_read(melp);   // then read from the MEL bitstream
-                          // 6 bits is the largest decodable MEL cwd
+    static bool mel_table_initialized = mel_init_table();
 
-      //repeat so long that there is enough decodable bits in tmp,
-      // and the runs store is not full (num_runs < 8)
-      while (melp->bits >= 6 && melp->num_runs < 8)
+    //************************************************************************/
+    /** @brief Decodes the MEL segment into a bitmap of MEL events
+     *
+     *  Bit i of the bitmap is the ith MEL event.  The cleanup pass
+     *  consumes MEL events in the same order whatever their values, so
+     *  the first num_events bits equal the events that decoding MEL runs
+     *  lazily would produce.  With the events in a bitmap, the decoder
+     *  can pick an event with a shift and a mask, instead of a run
+     *  counter whose branches are hard to predict when zero contexts are
+     *  common.
+     *
+     *  @param [in]  mbuf is the MEL segment, de-stuffed by destuff_mel;
+     *               it must hold num_events * 6 / 8 + 16 bytes
+     *  @param [out] events receives (num_events + 63) / 64 + 1 words
+     *  @param [in]  num_events is the number of events to decode
+     */
+    static inline
+    void mel_expand(const ui8* mbuf, ui64 *events, ui32 num_events)
+    {
+      // every symbol adds at least one event and consumes no more than
+      // 6 bits, so no more than num_events * 6 bits are read
+      ui64 tmp = 0;       // MEL bits, MSB first; the top bits are valid
+      ui32 bits = 0;      // number of valid bits in tmp
+      ui32 off = 0;       // read offset in mbuf
+      ui32 kidx = 0;      // state k times 64
+      ui32 pos = 0;       // number of decoded events
+      ui32 word = 0;      // index of the word that lo holds
+      ui64 lo = 0, hi = 0;
+      while (pos < num_events)
       {
-        int eval = mel_exp[melp->k]; // number of bits associated with state
-        int run = 0;
-        if (melp->tmp & (1ull<<63)) //The next bit to decode (stored in MSB)
-        { //one is found
-          run = 1 << eval;
-          run--; // consecutive runs of 0 events - 1
-          melp->k = melp->k + 1 < 12 ? melp->k + 1 : 12;//increment, max is 12
-          melp->tmp <<= 1; // consume one bit from tmp
-          melp->bits -= 1;
-          run = run << 1; // a stretch of zeros not terminating in one
-        }
-        else
-        { //0 is found
-          run = (int)(melp->tmp >> (63 - eval)) & ((1 << eval) - 1);
-          melp->k = melp->k - 1 > 0 ? melp->k - 1 : 0; //decrement, min is 0
-          melp->tmp <<= eval + 1; //consume eval + 1 bits (max is 6)
-          melp->bits -= eval + 1;
-          run = (run << 1) + 1; // a stretch of zeros terminating with one
-        }
-        eval = melp->num_runs * 7;           // 7 bits per run
-        melp->runs &= ~((ui64)0x3F << eval); // 6 bits are sufficient
-        melp->runs |= ((ui64)run) << eval;   // store the value in runs
-        melp->num_runs++;                    // increment count
+        ui64 v;
+        memcpy(&v, mbuf + off, 8);
+        v = __builtin_bswap64(v);
+        tmp |= v >> bits;
+        off += (63 - bits) >> 3;
+        bits |= 56;
+
+        ui64 e = mel_tbl[kidx + (ui32)(tmp >> 58)];
+        tmp <<= (ui32)e & 0x3F;
+        bits -= (ui32)e & 0x3F;
+        kidx = ((ui32)e >> 6) & 0x3C0;
+        ui32 count = ((ui32)e >> 16) & 0x3F;
+        ui64 pattern = e >> 32;
+
+        ui32 sh = pos & 63;
+        lo |= pattern << sh;
+        hi |= (pattern >> 1) >> (63 - sh);
+        pos += count;
+        events[word] = lo;
+        bool cross = (pos >> 6) != word;
+        lo = cross ? hi : lo;
+        hi = cross ? 0 : hi;
+        word += cross;
       }
+      events[word] = lo;
     }
-
-    //************************************************************************/
-    /** @brief Initiates a dec_mel_st structure for MEL decoding and reads
-     *         some bytes in order to get the read address to a multiple
-     *         of 4
-     *
-     *  @param [in]  melp is a pointer to dec_mel_st structure
-     *  @param [in]  bbuf is a pointer to byte buffer
-     *  @param [in]  lcup is the length of MagSgn+MEL+VLC segments
-     *  @param [in]  scup is the length of MEL+VLC segments
-     */
-    static inline
-    void mel_init(dec_mel_st *melp, ui8* bbuf, int lcup, int scup)
-    {
-      melp->data = bbuf + lcup - scup; // move the pointer to the start of MEL
-      melp->bits = 0;                  // 0 bits in tmp
-      melp->tmp = 0;                   //
-      melp->unstuff = false;           // no unstuffing
-      melp->size = scup - 1;           // size is the length of MEL+VLC-1
-      melp->k = 0;                     // 0 for state
-      melp->num_runs = 0;              // num_runs is 0
-      melp->runs = 0;                  //
-
-      //This code is borrowed; original is for a different architecture
-      //These few lines take care of the case where data is not at a multiple
-      // of 4 boundary.  It reads 1,2,3 up to 4 bytes from the MEL segment
-      int num = 4 - (int)(intptr_t(melp->data) & 0x3);
-      for (int i = 0; i < num; ++i) { // this code is similar to mel_read
-        assert(melp->unstuff == false || melp->data[0] <= 0x8F);
-        ui64 d = (melp->size > 0) ? *melp->data : 0xFF;//if buffer is consumed
-                                                       //set data to 0xFF
-        if (melp->size == 1) d |= 0xF; //if this is MEL+VLC-1, set LSBs to 0xF
-                                       // see the standard
-        melp->data += melp->size-- > 0; //increment if the end is not reached
-        int d_bits = 8 - melp->unstuff; //if unstuffing is needed, reduce by 1
-        melp->tmp = (melp->tmp << d_bits) | d; //store bits in tmp
-        melp->bits += d_bits;  //increment tmp by number of bits
-        melp->unstuff = ((d & 0xFF) == 0xFF); //true of next byte needs
-                                              //unstuffing
-      }
-      melp->tmp <<= (64 - melp->bits); //push all the way up so the first bit
-                                       // is the MSB
-    }
-
-    //************************************************************************/
-    /** @brief Retrieves one run from dec_mel_st; if there are no runs stored
-     *         MEL segment is decoded
-     *
-     * @param [in]  melp is a pointer to dec_mel_st structure
-     */
-    static inline
-    int mel_get_run(dec_mel_st *melp)
-    {
-      if (melp->num_runs == 0)  //if no runs, decode more bit from MEL segment
-        mel_decode(melp);
-
-      int t = melp->runs & 0x7F; //retrieve one run
-      melp->runs >>= 7;  // remove the retrieved run
-      melp->num_runs--;
-      return t; // return run
-    }
-
 
     //************************************************************************/
     /** @brief De-stuffs a forward-growing bitstream into a flat buffer
@@ -1569,10 +1517,6 @@ namespace ojph {
     void decode_cb_step1_vlc(ui16* scratch, ui8* coded_data, int lcup,
                              int scup, ui32 width, ui32 height, ui32 sstr)
     {
-        // init structures
-        dec_mel_st mel;
-        mel_init(&mel, coded_data, lcup, scup);
-
         // de-stuff the VLC segment; its size is at most scup - 1 < 4095
         // bytes (scup is a 12-bit value), and consumption per quad pair is
         // at most 7 + 7 + 30 bits, so 4096 bytes always suffice
@@ -1583,9 +1527,20 @@ namespace ojph {
         ui32 vlc_off = 0;
         ui32 vlc_bits = 0;
 
-        int run = mel_get_run(&mel); // decode runs of events from MEL bitstrm
-                                     // data represented as runs of 0 events
-                                     // See mel_decode description
+        // decode all the MEL events this codeblock can consume; one per
+        // quad, and one per quad pair in the initial row
+        ui32 qw = (width + 1) >> 1, qh = (height + 1) >> 1;
+        ui32 num_events = qw * qh + ((qw + 1) >> 1);
+        ui64 events[64 + 1];
+        num_events = num_events < 64 * 64 ? num_events : 64 * 64;
+        {
+          // a MEL symbol consumes no more than 6 bits per event
+          const ui32 mel_cap = 64 * 64 * 6 / 8;
+          ui8 mel_buf[mel_cap + 17];
+          destuff_mel(coded_data + lcup - scup, scup - 1, mel_buf, mel_cap);
+          mel_expand(mel_buf, events, num_events);
+        }
+        ui32 mel_idx = 0;
 
         ui64 vlc_val = 0;
         ui32 c_q = 0;
@@ -1602,24 +1557,15 @@ namespace ojph {
           //decode VLC using the context c_q and the head of VLC bitstream
           ui16 t0 = vlc_tbl0[ c_q + (vlc_val & 0x7F) ];
 
-          // if context is zero, use one MEL event
+          // if context is zero, use one MEL event; if the event is 0,
+          // discard decoded data, since we will decode again using a
+          // different context
           if (c_q == 0) //zero context
           {
-            run -= 2; //subtract 2, since events number if multiplied by 2
-
-            // Is the run terminated in 1? if so, use decoded VLC code,
-            // otherwise, discard decoded data, since we will decoded again
-            // using a different context
-            t0 = (run == -1) ? t0 : 0;
-
-            // is run -1 or -2? this means a run has been consumed
-            if (run < 0)
-              run = mel_get_run(&mel);  // get another run
+            ui32 ev = (ui32)(events[mel_idx >> 6] >> (mel_idx & 63)) & 1u;
+            if (ev == 0) t0 = 0;
+            ++mel_idx;
           }
-          //run -= (c_q == 0) ? 2 : 0;
-          //t0 = (c_q != 0 || run == -1) ? t0 : 0;
-          //if (run < 0)
-          //  run = mel_get_run(&mel);  // get another run
           sp[0] = t0;
           x += 2;
 
@@ -1635,22 +1581,15 @@ namespace ojph {
           //decode VLC using the context c_q and the head of VLC bitstream
           t1 = vlc_tbl0[c_q + (vlc_val & 0x7F)];
 
-          // if context is zero, use one MEL event
+          // if context is zero, use one MEL event; if event is 0, discard
+          // decoded t1
           if (c_q == 0 && x < width) //zero context
           {
-            run -= 2; //subtract 2, since events number if multiplied by 2
-
-            // if event is 0, discard decoded t1
-            t1 = (run == -1) ? t1 : 0;
-
-            if (run < 0) // have we consumed all events in a run
-              run = mel_get_run(&mel); // if yes, then get another run
+            ui32 ev = (ui32)(events[mel_idx >> 6] >> (mel_idx & 63)) & 1u;
+            if (ev == 0) t1 = 0;
+            ++mel_idx;
           }
           t1 = x < width ? t1 : 0;
-          //run -= (c_q == 0 && x < width) ? 2 : 0;
-          //t1 = (c_q != 0 || run == -1) ? t1 : 0;
-          //if (run < 0)
-          //  run = mel_get_run(&mel);  // get another run
           sp[2] = t1;
           x += 2;
 
@@ -1664,20 +1603,14 @@ namespace ojph {
           /////////////
           // uvlc_mode is made up of u_offset bits from the quad pair
           ui32 uvlc_mode = ((t0 & 0x8U) << 3) | ((t1 & 0x8U) << 4);
-          if (uvlc_mode == 0xc0)// if both u_offset are set, get an event from
-          {                     // the MEL run of events
-            run -= 2; //subtract 2, since events number if multiplied by 2
-
-            uvlc_mode += (run == -1) ? 0x40 : 0; // increment uvlc_mode by
-                                                 // is 0x40
-
-            if (run < 0)//if run is consumed (run is -1 or -2), get another run
-              run = mel_get_run(&mel);
+          // if both u_offset are set, get an event from the MEL events,
+          // and increment uvlc_mode by 0x40 if the event is 1
+          {
+            ui32 z = (uvlc_mode == 0xc0);
+            ui32 ev = (ui32)(events[mel_idx >> 6] >> (mel_idx & 63)) & 1u;
+            uvlc_mode += (z & ev) << 6;
+            mel_idx += z;
           }
-          //run -= (uvlc_mode == 0xc0) ? 2 : 0;
-          //uvlc_mode += (uvlc_mode == 0xc0 && run == -1) ? 0x40 : 0;
-          //if (run < 0)
-          //  run = mel_get_run(&mel);  // get another run
 
           //decode uvlc_mode to get u for both quads
           ui32 uvlc_entry = uvlc_tbl0[uvlc_mode + (vlc_val & 0x3F)];
@@ -1720,24 +1653,15 @@ namespace ojph {
             //decode VLC using the context c_q and the head of VLC bitstream
             ui16 t0 = vlc_tbl1[ c_q + (vlc_val & 0x7F) ];
 
-            // if context is zero, use one MEL event
+            // if context is zero, use one MEL event; if the event is 0,
+            // discard decoded data, since we will decode again using a
+            // different context
             if (c_q == 0) //zero context
             {
-              run -= 2; //subtract 2, since events number is multiplied by 2
-
-              // Is the run terminated in 1? if so, use decoded VLC code,
-              // otherwise, discard decoded data, since we will decoded again
-              // using a different context
-              t0 = (run == -1) ? t0 : 0;
-
-              // is run -1 or -2? this means a run has been consumed
-              if (run < 0)
-                run = mel_get_run(&mel);  // get another run
+              ui32 ev = (ui32)(events[mel_idx >> 6] >> (mel_idx & 63)) & 1u;
+              if (ev == 0) t0 = 0;
+              ++mel_idx;
             }
-            //run -= (c_q == 0) ? 2 : 0;
-            //t0 = (c_q != 0 || run == -1) ? t0 : 0;
-            //if (run < 0)
-            //  run = mel_get_run(&mel);  // get another run
             sp[0] = t0;
             x += 2;
 
@@ -1759,22 +1683,15 @@ namespace ojph {
             //decode VLC using the context c_q and the head of VLC bitstream
             t1 = vlc_tbl1[ c_q + (vlc_val & 0x7F)];
 
-            // if context is zero, use one MEL event
+            // if context is zero, use one MEL event; if event is 0,
+            // discard decoded t1
             if (c_q == 0 && x < width) //zero context
             {
-              run -= 2; //subtract 2, since events number if multiplied by 2
-
-              // if event is 0, discard decoded t1
-              t1 = (run == -1) ? t1 : 0;
-
-              if (run < 0) // have we consumed all events in a run
-                run = mel_get_run(&mel); // if yes, then get another run
+              ui32 ev = (ui32)(events[mel_idx >> 6] >> (mel_idx & 63)) & 1u;
+              if (ev == 0) t1 = 0;
+              ++mel_idx;
             }
             t1 = x < width ? t1 : 0;
-            //run -= (c_q == 0 && x < width) ? 2 : 0;
-            //t1 = (c_q != 0 || run == -1) ? t1 : 0;
-            //if (run < 0)
-            //  run = mel_get_run(&mel);  // get another run
             sp[2] = t1;
             x += 2;
 
