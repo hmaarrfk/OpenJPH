@@ -126,6 +126,32 @@ namespace ojph {
     }
 
     //////////////////////////////////////////////////////////////////////////
+    void rev_tx_from_cb64(const ui64 *sp, void *dp, ui32 K_max, float delta,
+                          ui32 count)
+    {
+      ojph_unused(delta);
+      const int shift = (int)(63 - K_max);
+      const hn::ScalableTag<si64> d64;
+      const size_t N = hn::Lanes(d64);
+      const auto mag_mask = hn::Set(d64, (si64)0x7FFFFFFFFFFFFFFFLL);
+      si64 *p = (si64*)dp;
+
+      ui32 i = 0;
+      for ( ; i + N <= count; i += (ui32)N)
+      {
+        auto v = hn::LoadU(d64, (const si64*)sp + i);
+        auto m = hn::ShiftRightSame(hn::And(v, mag_mask), shift);
+        hn::StoreU(hn::IfNegativeThenElse(v, hn::Neg(m), m), d64, p + i);
+      }
+      for ( ; i < count; ++i)
+      {
+        ui64 v = sp[i];
+        si64 val = (si64)((v & 0x7FFFFFFFFFFFFFFFULL) >> shift);
+        p[i] = (v & 0x8000000000000000ULL) ? -val : val;
+      }
+    }
+
+    //////////////////////////////////////////////////////////////////////////
     // fold a vector or-accumulator into the caller's max_val array; the
     // array holds 8 ui32 (see codeblock::max_val32), which matches the
     // AVX2 vector width; other widths fold entry-wise into the first
@@ -444,6 +470,7 @@ namespace ojph {
     HWY_EXPORT(irv_tx_to_cb32);
     HWY_EXPORT(irv_tx_from_cb32);
     HWY_EXPORT(rev_convert16);
+    HWY_EXPORT(rev_tx_from_cb64);
     HWY_EXPORT(saturate16);
     HWY_EXPORT(saturate32);
 
@@ -547,6 +574,13 @@ namespace ojph {
     void rev_convert16(const si16 *sp, si32 *dp, si32 shift, ui32 count)
     {
       HWY_DYNAMIC_DISPATCH(rev_convert16)(sp, dp, shift, count);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    void rev_tx_from_cb64(const ui64 *sp, void *dp, ui32 K_max, float delta,
+                          ui32 count)
+    {
+      HWY_DYNAMIC_DISPATCH(rev_tx_from_cb64)(sp, dp, K_max, delta, count);
     }
 
     //////////////////////////////////////////////////////////////////////////

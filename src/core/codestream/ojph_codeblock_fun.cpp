@@ -107,6 +107,8 @@ namespace ojph {
                              float delta_inv, ui32 count, ui32* max_val);
     void  irv_tx_from_cb32(const ui32 *sp, void *dp, ui32 K_max,
                                float delta, ui32 count);
+    void  rev_tx_from_cb64(const ui64 *sp, void *dp, ui32 K_max,
+                               float delta, ui32 count);
 #endif
 
     void codeblock_fun::init(bool reversible) {
@@ -196,6 +198,7 @@ namespace ojph {
             if (get_cpu_ext_level() < X86_CPU_EXT_LEVEL_AVX2 ||
                 tx_use_avx3)
               tx_from_cb32 = rev_tx_from_cb32;
+            tx_from_cb64 = rev_tx_from_cb64;
           }
           else {
             tx_to_cb32 = irv_tx_to_cb32;
