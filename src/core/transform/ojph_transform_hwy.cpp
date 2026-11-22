@@ -219,6 +219,13 @@ namespace ojph {
     }
 
     //////////////////////////////////////////////////////////////////////////
+    bool rev_vert_one_tap64(const lifting_step* s, const si64* sp,
+                                si64* dst, ui32 repeat, bool synthesis)
+    {
+      return rev_vert_step_one_tap_T<si64>(s, sp, dst, repeat, synthesis);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
     //
     //     Fused horizontal transforms for the rev13 kernel (WS)
     //
@@ -871,6 +878,13 @@ namespace ojph {
     }
 
     //////////////////////////////////////////////////////////////////////////
+    void rev_horz_ana_prev64(si64* lp, si64* hp, const si64* sp,
+                                 ui32 width, bool even)
+    {
+      rev_horz_ana_prev_T<si64>(lp, hp, sp, width, even);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
     void rev_horz_syn_prev16(si16* dp, const si16* lp, const si16* hp,
                                  ui32 width, bool even)
     {
@@ -882,6 +896,13 @@ namespace ojph {
                                  ui32 width, bool even)
     {
       rev_horz_syn_prev_T<si32>(dp, lp, hp, width, even);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    void rev_horz_syn_prev64(si64* dp, const si64* lp, const si64* hp,
+                                 ui32 width, bool even)
+    {
+      rev_horz_syn_prev_T<si64>(dp, lp, hp, width, even);
     }
 
     //////////////////////////////////////////////////////////////////////////
@@ -1103,6 +1124,7 @@ namespace ojph {
     HWY_EXPORT(rev_vert_step32);
     HWY_EXPORT(rev_vert_one_tap16);
     HWY_EXPORT(rev_vert_one_tap32);
+    HWY_EXPORT(rev_vert_one_tap64);
     HWY_EXPORT(rev13_horz_ana32);
     HWY_EXPORT(rev13_horz_syn32);
     HWY_EXPORT(rev53_horz_ana32);
@@ -1111,8 +1133,10 @@ namespace ojph {
     HWY_EXPORT(rev_horz_ws_syn32);
     HWY_EXPORT(rev_horz_ana_prev16);
     HWY_EXPORT(rev_horz_ana_prev32);
+    HWY_EXPORT(rev_horz_ana_prev64);
     HWY_EXPORT(rev_horz_syn_prev16);
     HWY_EXPORT(rev_horz_syn_prev32);
+    HWY_EXPORT(rev_horz_syn_prev64);
     HWY_EXPORT(simd_irv_vert_step);
     HWY_EXPORT(simd_irv_vert_times_K);
     HWY_EXPORT(simd_irv_horz_ana);
@@ -1235,6 +1259,12 @@ namespace ojph {
         done = HWY_DYNAMIC_DISPATCH(rev_vert_one_tap32)(s, src->i32,
                  aug->i32, repeat, synthesis);
       }
+      else if (aug->flags & line_buf::LFT_64BIT)
+      {
+        assert(src == NULL || src->flags & line_buf::LFT_64BIT);
+        done = HWY_DYNAMIC_DISPATCH(rev_vert_one_tap64)(s, src->i64,
+                 aug->i64, repeat, synthesis);
+      }
       if (!done)
         fb_rev_vert_step_one_tap(s, src, aug, repeat, synthesis);
     }
@@ -1303,6 +1333,12 @@ namespace ojph {
             src->i32, width, even);
           return;
         }
+        else if (src->flags & line_buf::LFT_64BIT)
+        {
+          HWY_DYNAMIC_DISPATCH(rev_horz_ana_prev64)(ldst->i64, hdst->i64,
+            src->i64, width, even);
+          return;
+        }
       }
       fb_rev_horz_ana_arb(atk, ldst, hdst, src, width, even);
     }
@@ -1325,6 +1361,12 @@ namespace ojph {
         {
           HWY_DYNAMIC_DISPATCH(rev_horz_syn_prev32)(dst->i32, lsrc->i32,
             hsrc->i32, width, even);
+          return;
+        }
+        else if (dst->flags & line_buf::LFT_64BIT)
+        {
+          HWY_DYNAMIC_DISPATCH(rev_horz_syn_prev64)(dst->i64, lsrc->i64,
+            hsrc->i64, width, even);
           return;
         }
       }
@@ -1410,6 +1452,17 @@ namespace ojph {
     }
 
     //////////////////////////////////////////////////////////////////////////
+    // set once simd_rev_horz_syn_arb is installed; its previous-sample
+    // kernels read their source lines and write only the destination
+    static bool prev_sample_syn_installed = false;
+
+    //////////////////////////////////////////////////////////////////////////
+    bool rev_horz_syn_arb_keeps_sources(const param_atk* atk)
+    {
+      return prev_sample_syn_installed && is_prev_sample_kernel(atk);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
     void install_rev_transforms()
     {
       const int64_t simd = hwy_simd_targets();
@@ -1445,6 +1498,7 @@ namespace ojph {
       rev_vert_step_one_tap    = simd_rev_vert_step_one_tap;
       rev_horz_ana_arb         = simd_rev_horz_ana_arb;
       rev_horz_syn_arb         = simd_rev_horz_syn_arb;
+      prev_sample_syn_installed = true;
     }
 
   } // !local namespace
