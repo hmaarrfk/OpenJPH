@@ -76,11 +76,24 @@ target_link_libraries(
   GTest::gtest_main
 )
 
+# configure pull_into tests
+add_executable(
+  test_pull_into
+  test_pull_into.cpp
+)
+
+target_link_libraries(
+  test_pull_into
+  ojph
+  GTest::gtest_main
+)
+
 include(GoogleTest)
 gtest_add_tests(TARGET test_executables)
 gtest_add_tests(TARGET test_mixed_coc)
 gtest_add_tests(TARGET test_rev13)
 gtest_add_tests(TARGET test_rev12)
+gtest_add_tests(TARGET test_pull_into)
 
 # The "\$(Configuration)" paths below are Visual Studio generator syntax;
 # an MSVC-family compiler driven by a single-config generator (cl or
