@@ -88,12 +88,25 @@ target_link_libraries(
   GTest::gtest_main
 )
 
+# configure sample range tests
+add_executable(
+  test_sample_range
+  test_sample_range.cpp
+)
+
+target_link_libraries(
+  test_sample_range
+  ojph
+  GTest::gtest_main
+)
+
 include(GoogleTest)
 gtest_add_tests(TARGET test_executables)
 gtest_add_tests(TARGET test_mixed_coc)
 gtest_add_tests(TARGET test_rev13)
 gtest_add_tests(TARGET test_rev12)
 gtest_add_tests(TARGET test_pull_into)
+gtest_add_tests(TARGET test_sample_range)
 
 # The "\$(Configuration)" paths below are Visual Studio generator syntax;
 # an MSVC-family compiler driven by a single-config generator (cl or

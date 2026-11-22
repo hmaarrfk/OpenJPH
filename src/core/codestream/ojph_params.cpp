@@ -1320,6 +1320,12 @@ namespace ojph {
       int s = 0;
       double bibo_l = bibo_gains::get_bibo_gain_l(num_decomps, true);
       ui32 X = (ui32) ceil(log(bibo_l * bibo_l) / M_LN2);
+      // B + X counts the sign, leaving B + X - 1 magnitude bit-planes. The
+      // most negative sample, -2^(B-1), needs B of them; with no
+      // decomposition the low-pass band is the image itself and its gain
+      // gives X = 0, so it needs one more bit. With decompositions X >= 1
+      // already, and nothing changes.
+      X = ojph_max(X, 1u);
       SPqcd.u8[s++] = (ui8)(B + X);
       ui32 max_B_plus_X = (ui32)(B + X);
       for (ui32 d = num_decomps; d > 0; --d)
