@@ -48,6 +48,7 @@
 #include "ojph_resolution.h"
 #include "ojph_codeblock.h"
 #include "ojph_precinct.h"
+#include "../transform/ojph_transform.h"
 
 namespace ojph {
 
@@ -88,6 +89,7 @@ namespace ojph {
       num_blocks.h -= tby0 >> ycb_prime;
 
       allocator->pre_alloc_obj<codeblock>(num_blocks.w);
+      allocator->pre_alloc_obj<bool>(num_blocks.w);
       //allocate codeblock headers
       allocator->pre_alloc_obj<coded_cb_header>((size_t)num_blocks.area());
 
@@ -184,6 +186,11 @@ namespace ojph {
       num_blocks.h -= tby0 >> ycb_prime;
 
       blocks = allocator->post_alloc_obj<codeblock>(num_blocks.w);
+      zero_regions = allocator->post_alloc_obj<bool>(num_blocks.w);
+      for (ui32 i = 0; i < num_blocks.w; ++i)
+        zero_regions[i] = false;
+      keeps_zero_regions = reversible &&
+        rev_horz_syn_arb_keeps_sources(cdp->access_atk());
       //allocate codeblock headers
       coded_cb_header *cp = coded_cbs =
         allocator->post_alloc_obj<coded_cb_header>((size_t)num_blocks.area());
@@ -379,13 +386,17 @@ namespace ojph {
 
       assert(cur_line >= 0);
 
-      //pull from codeblocks; for mask-like content most codeblocks are
+      //pull from codeblocks; for sparse content most codeblocks are
       //entirely zero, so runs of zero blocks are cleared with one memset
       //per run instead of one pull_line call (and one small memset) per
-      //codeblock
+      //codeblock.  When the synthesis only reads lines
+      //(keeps_zero_regions), a region a zero block cleared stays zero until
+      //a non-zero block writes it, and is not cleared again.
       for (ui32 i = 0; i < num_blocks.w; )
       {
-        if (blocks[i].is_zero_block())
+        if (blocks[i].is_zero_block() && zero_regions[i] && keeps_zero_regions)
+          ++i;
+        else if (blocks[i].is_zero_block())
         {
           // bytes per line sample, matching codeblock::pull_line's
           // zero_block path
@@ -393,14 +404,20 @@ namespace ojph {
             : ((lines->flags & line_buf::LFT_16BIT) ? sizeof(si16)
                                                     : sizeof(si32));
           si64 off = blocks[i].get_line_offset();
-          size_t w = blocks[i].get_width();
-          ++i;
-          while (i < num_blocks.w && blocks[i].is_zero_block())
-            w += blocks[i++].get_width();
+          size_t w = 0;
+          while (i < num_blocks.w && blocks[i].is_zero_block()
+                 && !(zero_regions[i] && keeps_zero_regions))
+          {
+            w += blocks[i].get_width();
+            zero_regions[i++] = true;
+          }
           memset((ui8*)lines->p + off * (si64)esz, 0, w * esz);
         }
         else
+        {
+          zero_regions[i] = false;
           blocks[i++].pull_line(lines + 0);
+        }
       }
 
       return lines;

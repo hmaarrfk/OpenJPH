@@ -70,6 +70,8 @@ namespace ojph {
         lines = NULL;
         parent = NULL;
         blocks = NULL;
+        zero_regions = NULL;
+        keeps_zero_regions = false;
         xcb_prime = ycb_prime = 0;
         cur_cb_row = 0;
         cur_line = 0;
@@ -106,6 +108,9 @@ namespace ojph {
       line_buf *lines;
       resolution* parent;
       codeblock* blocks;
+      bool* zero_regions;          // the part of lines under each block
+                                   // column is known to hold zeros
+      bool keeps_zero_regions;     // lines is only read, so zeros stay
       size num_blocks;
       size log_PP;
       ui32 xcb_prime, ycb_prime;

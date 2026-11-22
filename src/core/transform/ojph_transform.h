@@ -93,6 +93,11 @@ namespace ojph {
         const line_buf* hsrc, ui32 width, bool even);
 
     /////////////////////////////////////////////////////////////////////////
+    // True when rev_horz_syn_arb, as installed, only reads its source lines
+    // for this kernel (the generic implementation lifts them in place).
+    bool rev_horz_syn_arb_keeps_sources(const param_atk* atk);
+
+    /////////////////////////////////////////////////////////////////////////
     // Irreversible functions
     /////////////////////////////////////////////////////////////////////////
 
