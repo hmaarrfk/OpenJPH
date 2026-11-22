@@ -58,48 +58,6 @@ namespace ojph {
   namespace local {
 
     //************************************************************************/
-    /** @brief De-stuffs the MEL segment into a flat, MSB-first buffer
-     *
-     *  This replicates the bit production of the MEL reader used by the
-     *  other block decoders (mel_init and mel_read): a byte following a
-     *  0xFF byte contributes only its 7 lower bits, the last byte of the
-     *  segment has its 4 lower bits set (the MEL and VLC segments can
-     *  overlap), and bits beyond the end of the segment read as 1s.  Bits
-     *  are stored from the MSB of each output byte.
-     *
-     *  Writes at most cap + 1 destuffed bytes followed by 16 bytes of
-     *  0xFF padding; dst must have room for cap + 17 bytes.
-     *
-     *  @param [in]  src is a pointer to the start of the MEL segment
-     *  @param [in]  size is the number of bytes in the MEL segment
-     *  @param [in]  dst is the output buffer, of at least cap + 17 bytes
-     *  @param [in]  cap is the maximum number of destuffed bytes to write
-     */
-    static inline
-    void destuff_mel(const ui8* src, int size, ui8* dst, ui32 cap)
-    {
-      ui8* o = dst;
-      ui8* o_end = dst + cap;
-      ui32 acc = 0;        // pending bits, the low nb bits are valid
-      ui32 nb = 0;         // number of valid bits in acc; always < 8
-      bool unstuff = false;
-      for (int i = 0; i < size && o < o_end; ++i)
-      {
-        ui32 d = src[i];
-        if (i == size - 1)
-          d |= 0xF;
-        ui32 d_bits = 8 - unstuff;
-        acc = (acc << d_bits) | (d & ((1u << d_bits) - 1));
-        nb += d_bits;
-        unstuff = (d == 0xFF);
-        if (nb >= 8) { nb -= 8; *o++ = (ui8)(acc >> nb); }
-      }
-      // fill the bits below the valid ones with 1s, and pad with 0xFF
-      *o = (ui8)((acc << (8 - nb)) | (0xFFu >> nb));
-      memset(o + 1, 0xFF, 16);
-    }
-
-    //************************************************************************/
     /** @brief A table that decodes several MEL symbols in one lookup
      *
      *  The index is the MEL state k times 64 plus the next 6 MEL bits.
@@ -165,42 +123,106 @@ namespace ojph {
     static bool mel_table_initialized = mel_init_table();
 
     //************************************************************************/
-    /** @brief Decodes the MEL segment into a bitmap of MEL events
+    /** @brief State for decoding the MEL segment into a bitmap of MEL
+     *         events, on demand; see mel_decode_events
+     */
+    struct mel_events {
+      const ui8* data;    // the next MEL byte to read
+      int size;           // the number of MEL bytes left
+      bool unstuff;       // the last byte read was 0xFF
+      ui64 tmp;           // MEL bits, MSB first; the top bits are valid
+      ui32 bits;          // number of valid bits in tmp
+      ui32 kidx;          // state k times 64
+      ui32 pos;           // number of decoded events
+      ui32 word;          // index of the word that lo holds
+      ui64 lo, hi;        // events of word, and of word + 1
+
+      void init(const ui8* data, int size)
+      {
+        this->data = data; this->size = size; unstuff = false;
+        tmp = 0; bits = 0; kidx = 0; pos = 0; word = 0; lo = hi = 0;
+      }
+    };
+
+    //************************************************************************/
+    /** @brief Decodes MEL events into a bitmap until there are at least
+     *         target of them
      *
      *  Bit i of the bitmap is the ith MEL event.  The cleanup pass
      *  consumes MEL events in the same order whatever their values, so
-     *  the first num_events bits equal the events that decoding MEL runs
-     *  lazily would produce.  With the events in a bitmap, the decoder
-     *  can pick an event with a shift and a mask, instead of a run
-     *  counter whose branches are hard to predict when zero contexts are
-     *  common.
+     *  the bitmap holds the events that decoding MEL runs lazily would
+     *  produce.  With the events in a bitmap, the decoder can pick an
+     *  event with a shift and a mask, instead of a run counter whose
+     *  branches are hard to predict when zero contexts are common.  The
+     *  decoder asks for events in batches as its quads need them, so that
+     *  codeblocks that use few MEL events do not pay for decoding the rest
+     *  of the segment, which also holds the VLC bytes.
      *
-     *  @param [in]  mbuf is the MEL segment, de-stuffed by destuff_mel;
-     *               it must hold num_events * 6 / 8 + 16 bytes
-     *  @param [out] events receives (num_events + 63) / 64 + 1 words
-     *  @param [in]  num_events is the number of events to decode
+     *  The MEL bits are read as mel_read of the other block decoders reads
+     *  them: a byte following a 0xFF byte contributes only its 7 lower
+     *  bits, the last byte of the segment has its 4 lower bits set (the
+     *  MEL and VLC segments can overlap), and bits beyond the end of the
+     *  segment read as 1s.
+     *
+     *  Out of line, since the quad loops call it rarely.
+     *
+     *  @param [in,out] m is the MEL state
+     *  @param [out]    events must have room for (target + 63) / 64 + 1
+     *                  words
+     *  @param [in]     target is the number of events needed
+     *  @return ui32 the number of decoded events
      */
-    static inline
-    void mel_expand(const ui8* mbuf, ui64 *events, ui32 num_events)
+    OJPH_NO_INLINE
+    ui32 mel_decode_events(mel_events& m, ui64 *events, ui32 target)
     {
-      // every symbol adds at least one event and consumes no more than
-      // 6 bits, so no more than num_events * 6 bits are read
-      ui64 tmp = 0;       // MEL bits, MSB first; the top bits are valid
-      ui32 bits = 0;      // number of valid bits in tmp
-      ui32 off = 0;       // read offset in mbuf
-      ui32 kidx = 0;      // state k times 64
-      ui32 pos = 0;       // number of decoded events
-      ui32 word = 0;      // index of the word that lo holds
-      ui64 lo = 0, hi = 0;
-      while (pos < num_events)
+      ui64 tmp = m.tmp, lo = m.lo, hi = m.hi;
+      ui32 bits = m.bits, kidx = m.kidx, pos = m.pos, word = m.word;
+      while (pos < target)
       {
-        ui64 v;
-        memcpy(&v, mbuf + off, 8);
-        v = __builtin_bswap64(v);
-        tmp |= v >> bits;
-        off += (63 - bits) >> 3;
-        bits |= 56;
+        if (bits <= 32)
+        { // read and unstuff 4 bytes, as mel_read does
+          ui32 val = 0xFFFFFFFF;       // feed in 0xFF if exhausted
+          if (m.size > 4) {
+            memcpy(&val, m.data, 4);
+            m.data += 4;
+            m.size -= 4;
+          }
+          else if (m.size > 0)
+          {
+            int i = 0;
+            while (m.size > 1) {
+              ui32 v = *m.data++;
+              ui32 msk = ~(0xFFu << i);
+              val = (val & msk) | (v << i);
+              --m.size;
+              i += 8;
+            }
+            ui32 v = *m.data++;          // the last byte
+            v |= 0xF;                    // MEL and VLC segments can overlap
+            ui32 msk = ~(0xFFu << i);
+            val = (val & msk) | (v << i);
+            --m.size;
+          }
+          int nb = 32 - m.unstuff;
+          ui32 t = val & 0xFF;
+          bool u = ((val & 0xFF) == 0xFF);
+          nb -= u;
+          t = t << (8 - u);
+          t |= (val >> 8) & 0xFF;
+          u = (((val >> 8) & 0xFF) == 0xFF);
+          nb -= u;
+          t = t << (8 - u);
+          t |= (val >> 16) & 0xFF;
+          u = (((val >> 16) & 0xFF) == 0xFF);
+          nb -= u;
+          t = t << (8 - u);
+          t |= (val >> 24) & 0xFF;
+          m.unstuff = (((val >> 24) & 0xFF) == 0xFF);
+          tmp |= ((ui64)t) << (64 - (ui32)nb - bits);
+          bits += (ui32)nb;
+        }
 
+        // decode as many MEL symbols as the next 6 bits hold
         ui64 e = mel_tbl[kidx + (ui32)(tmp >> 58)];
         tmp <<= (ui32)e & 0x3F;
         bits -= (ui32)e & 0x3F;
@@ -219,6 +241,9 @@ namespace ojph {
         word += cross;
       }
       events[word] = lo;
+      m.tmp = tmp; m.lo = lo; m.hi = hi;
+      m.bits = bits; m.kidx = kidx; m.pos = pos; m.word = word;
+      return pos;
     }
 
     //************************************************************************/
@@ -1551,20 +1576,13 @@ namespace ojph {
         ui32 vlc_off = 0;
         ui32 vlc_bits = 0;
 
-        // decode all the MEL events this codeblock can consume; one per
-        // quad, and one per quad pair in the initial row
-        ui32 qw = (width + 1) >> 1, qh = (height + 1) >> 1;
-        ui32 num_events = qw * qh + ((qw + 1) >> 1);
-        ui64 events[64 + 1];
-        num_events = num_events < 64 * 64 ? num_events : 64 * 64;
-        {
-          // a MEL symbol consumes no more than 6 bits per event
-          const ui32 mel_cap = 64 * 64 * 6 / 8;
-          ui8 mel_buf[mel_cap + 17];
-          destuff_mel(coded_data + lcup - scup, scup - 1, mel_buf, mel_cap);
-          mel_expand(mel_buf, events, num_events);
-        }
-        ui32 mel_idx = 0;
+        // MEL events, decoded as the quads need them, 64 the first time
+        // and twice as many each time after, up to 256; a quad pair uses
+        // no more than 3 events
+        ui64 events[64 + 2];
+        mel_events mel;
+        mel.init(coded_data + lcup - scup, scup - 1);
+        ui32 mel_idx = 0, mel_avail = 0, mel_batch = 64;
 
         ui64 vlc_val = 0;
         ui32 c_q = 0;
@@ -1574,6 +1592,14 @@ namespace ojph {
         {
           // decode VLC
           /////////////
+
+          if (mel_idx + 3 > mel_avail)
+          {
+            ui32 target = mel_idx + mel_batch;
+            mel_avail = mel_decode_events(mel, events,
+              target < 64 * 64 ? target : 64 * 64);
+            mel_batch = mel_batch < 256 ? mel_batch << 1 : 256;
+          }
 
           // first quad
           drefill(vlc_val, vlc_bits, vlc_off, vlc_buf, vlc_limit);
@@ -1670,6 +1696,14 @@ namespace ojph {
             // sigma_q (n, ne, nf)
             c_q |= ((sp[0 - (si32)sstr] & 0xA0U) << 2);
             c_q |= ((sp[2 - (si32)sstr] & 0x20U) << 4);
+
+            if (mel_idx + 3 > mel_avail)
+            {
+              ui32 target = mel_idx + mel_batch;
+              mel_avail = mel_decode_events(mel, events,
+                target < 64 * 64 ? target : 64 * 64);
+              mel_batch = mel_batch < 256 ? mel_batch << 1 : 256;
+            }
 
             // first quad
             drefill(vlc_val, vlc_bits, vlc_off, vlc_buf, vlc_limit);
