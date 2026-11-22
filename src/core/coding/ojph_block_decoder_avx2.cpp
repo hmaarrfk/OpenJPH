@@ -578,14 +578,15 @@ namespace ojph {
     OJPH_FORCE_INLINE
     __m256i decode_two_quad32_avx2(__m256i inf_u_q, __m256i U_q,
                                    const ui8* dbuf, ui32 limit, ui32& pos,
-                                   ui32 p, __m128i& vn) {
+                                   ui32 p, __m128i& vn, bool decode_all) {
         __m256i row = _mm256_setzero_si256();
 
         // we keeps e_k, e_1, and rho in w2
         __m256i flags = _mm256_and_si256(inf_u_q, _mm256_set_epi32(0x8880, 0x4440, 0x2220, 0x1110, 0x8880, 0x4440, 0x2220, 0x1110));
         __m256i insig = _mm256_cmpeq_epi32(flags, _mm256_setzero_si256());
 
-        if ((uint32_t)_mm256_movemask_epi8(insig) != (uint32_t)0xFFFFFFFF) //are all insignificant?
+        if (decode_all ||
+            (uint32_t)_mm256_movemask_epi8(insig) != (uint32_t)0xFFFFFFFF) //are all insignificant?
         {
             flags = _mm256_mullo_epi16(flags, _mm256_set_epi16(1, 1, 2, 2, 4, 4, 8, 8, 1, 1, 2, 2, 4, 4, 8, 8));
 
@@ -688,7 +689,7 @@ namespace ojph {
     OJPH_FORCE_INLINE
     __m256i decode_four_quad16(const __m128i inf_u_q, __m128i U_q,
                                const ui8* dbuf, ui32 limit, ui32& pos,
-                               ui32 p, __m128i& vn) {
+                               ui32 p, __m128i& vn, bool decode_all) {
 
         __m256i w0;     // workers
         __m256i insig;  // lanes hold FF's if samples are insignificant
@@ -706,7 +707,8 @@ namespace ojph {
                              (si16)0x8880, 0x4440, 0x2220, 0x1110,
                              (si16)0x8880, 0x4440, 0x2220, 0x1110));
         insig = _mm256_cmpeq_epi16(flags, _mm256_setzero_si256());
-        if ((uint32_t)_mm256_movemask_epi8(insig) != (uint32_t)0xFFFFFFFF) //are all insignificant?
+        if (decode_all ||
+            (uint32_t)_mm256_movemask_epi8(insig) != (uint32_t)0xFFFFFFFF) //are all insignificant?
         {
             ddd = _mm_or_si128(_mm_bslli_si128(U_q, 2), U_q);
             __m256i U_q_avx = _mm256_permutevar8x32_epi32(_mm256_castsi128_si256(ddd),
@@ -894,7 +896,7 @@ namespace ojph {
               }
 
               __m128i vn = _mm_set1_epi16(2);
-              __m256i row = decode_four_quad16(inf_u_q, U_q, dbuf, limit, pos, p, vn);
+              __m256i row = decode_four_quad16(inf_u_q, U_q, dbuf, limit, pos, p, vn, false);
 
               w = _mm_cvtsi32_si128(*(unsigned short const*)(vp));
               _mm_storeu_si128((__m128i*)vp, _mm_or_si128(w, vn));
@@ -956,13 +958,23 @@ namespace ojph {
           ui32 *dp = decoded_data + y * stride;
           vp[0] = 2; // for easy calculation of emax
 
+          bool decode_all = false;
           for (ui32 x = 0; x < width; x += 8, sp += 8, vp += 4, dp += 8, vp_32 += 4) {
+            // decoding quads with no significant samples gives zeros, and
+            // decides nothing; so, when any of the next eight quads has
+            // significant samples, decode both quad quartets without
+            // checking, which is easier to predict than a check per quartet
+            if ((x & 8) == 0) {
+              __m256i q = _mm256_loadu_si256((__m256i*)sp);
+              decode_all = !_mm256_testz_si256(q, _mm256_set1_epi32(0xFFF0));
+            }
+
             ////process four quads
               __m128i inf_u_q = _mm_loadu_si128((__m128i*)sp);
               __m128i U_q = _mm_loadu_si128((__m128i*)vp_32);
 
             __m128i vn = _mm_set1_epi16(2);
-            __m256i row = decode_four_quad16(inf_u_q, U_q, dbuf, limit, pos, p, vn);
+            __m256i row = decode_four_quad16(inf_u_q, U_q, dbuf, limit, pos, p, vn, decode_all);
 
             __m128i w = _mm_cvtsi32_si128(*(unsigned short const*)(vp));
             _mm_storeu_si128((__m128i*)vp, _mm_or_si128(w, vn));
@@ -1026,7 +1038,7 @@ namespace ojph {
                 return false;
             }
 
-            __m256i row = decode_two_quad32_avx2(inf_u_q, U_q, dbuf, limit, pos, p, vn);
+            __m256i row = decode_two_quad32_avx2(inf_u_q, U_q, dbuf, limit, pos, p, vn, false);
             row = _mm256_permutevar8x32_epi32(row, _mm256_setr_epi32(0, 2, 4, 6, 1, 3, 5, 7));
             _mm_store_si128((__m128i*)dp, _mm256_castsi256_si128(row));
             _mm_store_si128((__m128i*)(dp + stride), _mm256_extracti128_si256(row, 0x1));
@@ -1082,7 +1094,19 @@ namespace ojph {
           ui32 *dp = decoded_data + y * stride;
           vp[0] = 2; // for easy calculation of emax
 
+          bool decode_all = false;
           for (ui32 x = 0; x < width; x += 4, sp += 4, vp += 2, dp += 4) {
+            // decoding a pair of quads with no significant samples gives
+            // zeros, and decides nothing; so, when any of the next four
+            // quads has significant samples, decode both pairs without
+            // checking, which is easier to predict than a check per pair
+            if ((x & 4) == 0) {
+              ui64 qa, qb;
+              memcpy(&qa, sp, 8);
+              memcpy(&qb, sp + 4, 8);
+              decode_all = ((qa | qb) & 0x0000FFF00000FFF0ull) != 0;
+            }
+
             //process two quads
             __m128i vn = _mm_set1_epi32(2);
 
@@ -1092,7 +1116,7 @@ namespace ojph {
             __m256i U_q = _mm256_castsi128_si256(_mm_loadl_epi64((__m128i*)(vp + v_n_size)));
             U_q = _mm256_permutevar8x32_epi32(U_q, _mm256_setr_epi32(0, 0, 0, 0, 1, 1, 1, 1));
 
-            __m256i row = decode_two_quad32_avx2(inf_u_q, U_q, dbuf, limit, pos, p, vn);
+            __m256i row = decode_two_quad32_avx2(inf_u_q, U_q, dbuf, limit, pos, p, vn, decode_all);
             row = _mm256_permutevar8x32_epi32(row, _mm256_setr_epi32(0, 2, 4, 6, 1, 3, 5, 7));
             _mm_store_si128((__m128i*)dp, _mm256_castsi256_si128(row));
             _mm_store_si128((__m128i*)(dp + stride), _mm256_extracti128_si256(row, 0x1));
