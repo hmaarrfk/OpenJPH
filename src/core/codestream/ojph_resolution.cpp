@@ -267,7 +267,7 @@ namespace ojph {
         const param_atk* atk = cdp->access_atk();
         bool reversible = atk->is_reversible();
         bool use16 = can_use_16bit_lines(qp, cdp, codestream->get_siz(),
-                                         comp_num);
+                                         codestream->get_nlt(), comp_num);
 
         ui32 width = res_rect.siz.w + 1;
         if (reversible)
@@ -548,7 +548,7 @@ namespace ojph {
         const param_qcd* qp = codestream->access_qcd()->get_qcc(comp_num);
         ui32 precision = qp->propose_precision(cdp);
         bool use16 = can_use_16bit_lines(qp, cdp, codestream->get_siz(),
-                                         comp_num);
+                                         codestream->get_nlt(), comp_num);
 
         // initiate storage of line_buf
         ui32 width = res_rect.siz.w + 1;
