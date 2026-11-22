@@ -327,15 +327,20 @@ namespace ojph {
 
     /**
      * @brief Pulls the next row, like pull(), but writes its samples into
-     *        dst as integers of sample_bytes bytes (1, 2 or 4), signed as
-     *        the component is, without the 32-bit line_buf in between.
+     *        dst as integers of sample_bytes bytes (1, 2 or 4), without the
+     *        32-bit line_buf in between.
+     *
+     * 1 and 2-byte samples are saturated to the range of the destination
+     * type; 4-byte samples are the 32 bits pull() returns.
      *
      * @param dst the row's first sample; the row is the component's width.
      * @param sample_bytes the size of each sample written to dst.
+     * @param dst_signed whether the samples written to dst are signed.
      * @param comp_num returns the component to which the row belongs.
      * @return false when there is no row left, as pull() returns NULL.
      */
-    bool pull_into(void *dst, ui32 sample_bytes, ui32 &comp_num);
+    bool pull_into(void *dst, ui32 sample_bytes, bool dst_signed,
+                   ui32 &comp_num);
 
     /**
      * @brief Call this function to close the underlying file; works for both

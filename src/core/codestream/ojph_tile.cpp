@@ -37,6 +37,7 @@
 
 
 #include <climits>
+#include <limits>
 #include <cmath>
 
 #include "ojph_arch.h"
@@ -59,6 +60,10 @@ namespace ojph {
     // of those targets being available
     bool hwy_tx_kernels_available();
     void rev_convert16(const si16 *sp, si32 *dp, si32 shift, ui32 count);
+    void saturate16(const si16 *sp, void *dp, si32 shift, ui32 count,
+                    ui32 sample_bytes, bool dst_signed);
+    void saturate32(const si32 *sp, void *dp, si32 shift, ui32 count,
+                    ui32 sample_bytes, bool dst_signed);
     #define OJPH_TILE_USE_HWY
 #endif
 
@@ -557,35 +562,51 @@ namespace ojph {
 
 
     //////////////////////////////////////////////////////////////////////////
-    template <typename S, typename D>
+    template <typename T, typename S, typename D>
+    static inline void saturate_line(const S *sp, D *dp, T shift, ui32 count)
+    {
+      const T low = (T)std::numeric_limits<D>::min();
+      const T high = (T)std::numeric_limits<D>::max();
+      for (ui32 i = 0; i < count; ++i)
+      {
+        T v = (T)sp[i] + shift;
+        v = v < low ? low : v;
+        v = v > high ? high : v;
+        dp[i] = (D)v;
+      }
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+    template <typename D, typename S>
     static inline void narrow_line(const S *sp, D *dp, si64 shift, ui32 count)
     {
-      if (sizeof(S) <= sizeof(ui32))
+      if (sizeof(D) == sizeof(ui32))
       {
         ui32 s = (ui32)shift;
         for (ui32 i = 0; i < count; ++i)
           dp[i] = (D)((ui32)sp[i] + s);
       }
+      else if (sizeof(S) <= sizeof(si32) && shift < ((si64)1 << 30))
+        saturate_line<si32>(sp, dp, (si32)shift, count);
       else
-        for (ui32 i = 0; i < count; ++i)
-          dp[i] = (D)((ui64)sp[i] + (ui64)shift);
+        saturate_line<si64>(sp, dp, shift, count);
     }
 
     //////////////////////////////////////////////////////////////////////////
     template <typename S>
     static inline void narrow_line(const S *sp, void *dst, ui32 sample_bytes,
-                                   bool is_signed, si64 shift, ui32 count)
+                                   bool dst_signed, si64 shift, ui32 count)
     {
       if (sample_bytes == 1) {
-        if (is_signed) narrow_line(sp, (si8*)dst, shift, count);
+        if (dst_signed) narrow_line(sp, (si8*)dst, shift, count);
         else narrow_line(sp, (ui8*)dst, shift, count);
       }
       else if (sample_bytes == 2) {
-        if (is_signed) narrow_line(sp, (si16*)dst, shift, count);
+        if (dst_signed) narrow_line(sp, (si16*)dst, shift, count);
         else narrow_line(sp, (ui16*)dst, shift, count);
       }
       else {
-        if (is_signed) narrow_line(sp, (si32*)dst, shift, count);
+        if (dst_signed) narrow_line(sp, (si32*)dst, shift, count);
         else narrow_line(sp, (ui32*)dst, shift, count);
       }
     }
@@ -601,7 +622,8 @@ namespace ojph {
     }
 
     //////////////////////////////////////////////////////////////////////////
-    bool tile::pull_into(void *dst, ui32 sample_bytes, ui32 comp_num)
+    bool tile::pull_into(void *dst, ui32 sample_bytes, bool dst_signed,
+                         ui32 comp_num)
     {
       assert(comp_num < num_comps && can_pull_into(comp_num));
       if (cur_line[comp_num] >= recon_comp_rects[comp_num].siz.h)
@@ -617,15 +639,33 @@ namespace ojph {
       void *out = (ui8*)dst + (size_t)line_offsets[comp_num] * sample_bytes;
       si64 shift = is_signed[comp_num] ? 0
         : (si64)1 << (num_bits[comp_num] - 1);
+#ifdef OJPH_TILE_USE_HWY
+      static const bool use_hwy = hwy_tx_kernels_available();
+      if (use_hwy && sample_bytes < 4 && shift < ((si64)1 << 30))
+      {
+        if (src_line->flags & line_buf::LFT_16BIT)
+        {
+          saturate16(src_line->i16, out, (si32)shift, comp_width,
+                     sample_bytes, dst_signed);
+          return true;
+        }
+        if (src_line->flags & line_buf::LFT_32BIT)
+        {
+          saturate32(src_line->i32, out, (si32)shift, comp_width,
+                     sample_bytes, dst_signed);
+          return true;
+        }
+      }
+#endif
       if (src_line->flags & line_buf::LFT_16BIT)
-        narrow_line(src_line->i16, out, sample_bytes, is_signed[comp_num],
-                    shift, comp_width);
+        narrow_line(src_line->i16, out, sample_bytes, dst_signed, shift,
+                    comp_width);
       else if (src_line->flags & line_buf::LFT_32BIT)
-        narrow_line(src_line->i32, out, sample_bytes, is_signed[comp_num],
-                    shift, comp_width);
+        narrow_line(src_line->i32, out, sample_bytes, dst_signed, shift,
+                    comp_width);
       else
-        narrow_line(src_line->i64, out, sample_bytes, is_signed[comp_num],
-                    shift, comp_width);
+        narrow_line(src_line->i64, out, sample_bytes, dst_signed, shift,
+                    comp_width);
       return true;
     }
 

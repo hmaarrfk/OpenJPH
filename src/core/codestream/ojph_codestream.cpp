@@ -196,9 +196,10 @@ namespace ojph {
   }
 
   ////////////////////////////////////////////////////////////////////////////
-  bool codestream::pull_into(void *dst, ui32 sample_bytes, ui32 &comp_num)
+  bool codestream::pull_into(void *dst, ui32 sample_bytes, bool dst_signed,
+                             ui32 &comp_num)
   {
-    return state->pull_into(dst, sample_bytes, comp_num);
+    return state->pull_into(dst, sample_bytes, dst_signed, comp_num);
   }
 
 
